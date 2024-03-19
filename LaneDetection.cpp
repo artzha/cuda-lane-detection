@@ -20,6 +20,27 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    // TODO: Replace with the following
+    /*
+    imageCallback(rostopic type):
+        add image to queue for corresponding name
+
+    cam_topics_list = [topicname1, topicname2, ...]
+    cloud_subscriber = rospy.Subscriber(cloud_topic, PointCloud2, cloudCallback)
+    image_subscribers = [ rospy.Subscriber(topic, Image, imageCallback) ] ] for topic in cam_topics_list
+    image_queues = [ Queue() ] * num_cameras
+    cloud_queue = Queue()
+
+    while ros::ok():
+        if image_queue and cloud_queue not empty:
+            detectLanes(image, camid, houghStrategy)
+
+            backproject 2d lines to 3d using camera calibrations [Ji-Hwan] Priority 3
+            convert lane detection to GM format [Ji-Hwan] Priority 1
+            publish over ROS [Ji-Hwan] Priority 2
+        ros::spinOnce()
+    */
+
     // Read input video
     VideoCapture capture(argv[1]);
     // Check which strategy to use for hough transform (CUDA or sequential)
