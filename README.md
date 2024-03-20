@@ -10,8 +10,8 @@ Run the following commands to build and run the docker container. This will auto
 bash bash/build_docker.sh
 ```
 
-```Runs the docker container
-bash bash/run_docker.sh
+```Starts the docker container
+bash bash/start_docker.sh
 ```
 
 # In the Docker Container
