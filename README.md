@@ -3,11 +3,26 @@ CUDA Implementation of a Hough Transform based Lane Detection algorithm.
 
 <img src="https://i.ibb.co/5RM4n5F/Picture1.png" alt="Picture1" border="0">
 
+## Building Docker Container
+Run the following commands to build and run the docker container. This will automatically install the openCV CUDA, and ROS Noetic dependencies.
+
+```Builds the docker container
+bash bash/build_docker.sh
+```
+
+```Runs the docker container
+bash bash/run_docker.sh
+```
+
+# In the Docker Container
+
+You will need to compile and run the program within the docker container using the following command.
+
 ## Compiling
 The program can be compiled on the Linux lab machines using the following command:
 
 ```
-nvcc -gencode arch=compute_50,code=sm_50 -I/usr/local/include/opencv4 -L/usr/local/lib/ *.cpp *cu -lopencv_core -lopencv_highgui -lopencv_imgcodecs -lopencv_imgproc -lopencv_videoio -std=c++11 -o LaneDetection.out
+bash bash/compile_cuda.sh
 ```
 
 ## Running
