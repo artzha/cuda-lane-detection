@@ -1,6 +1,6 @@
 #include "HoughTransform.h"
 
-using namespace thrust;
+// using namespace thrust;
 
 #define THETA_STEP_SIZE 0.1
 #define RHO_STEP_SIZE 2

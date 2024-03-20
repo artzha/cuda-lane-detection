@@ -53,7 +53,7 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
-    VideoWriter video(argv[2], VideoWriter::fourcc('M','J','P','G'), 30,
+    VideoWriter video(argv[2], VideoWriter::fourcc('a', 'v', 'c', '1') , 30,
                       Size(frameWidth, frameHeight), true);
 
     detectLanes(capture, video, houghStrategy);
@@ -132,7 +132,7 @@ void detectLanes(VideoCapture inputVideo, VideoWriter outputVideo, int houghStra
 
 /** Draws given lines onto frame */
 void drawLines(Mat &frame, vector<Line> lines) {
-    for (int i = 0; i < lines.size(); i++) {
+    for (size_t i = 0; i < lines.size(); i++) {
         int y1 = frame.rows;
         int y2 = (frame.rows / 2) + (frame.rows / 10);
         int x1 = (int) lines[i].getX(y1);
