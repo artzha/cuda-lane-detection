@@ -12,8 +12,10 @@ Mat filterLanes(Mat img) {
 	cvtColor(img, grayImg, COLOR_BGR2GRAY);
 
 
-	Scalar whiteMin(0, 0, 120);
-    Scalar whiteMax(180, 70, 255);
+	// Scalar whiteMin(0, 0, 120);
+    // Scalar whiteMax(180, 70, 255);
+	Scalar whiteMin(0, 0, 145); // Lower boundary of white (considering shadows)
+	Scalar whiteMax(180, 50, 255); // Upper boundary of white
 	Scalar yellowMin(15, 100, 100);
     Scalar yellowMax(30, 255, 255);
 
@@ -54,7 +56,7 @@ Mat regionOfInterest(Mat img) {
 
 	vector<Point> vertices;
 	float pct_row_max = 0.8;
-	float pct_row_min = 0.45;
+	float pct_row_min = 0.5;
 	vertices.push_back(Point(img.cols / 9, img.rows * pct_row_max));
 	vertices.push_back(Point(img.cols - (img.cols / 9), img.rows * pct_row_max));
 	// vertices.push_back(Point((img.cols / 2) + (img.cols / 8), (img.rows / 2) + (img.rows / 10)));

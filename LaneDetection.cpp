@@ -12,7 +12,7 @@
 #include "sensor_msgs/PointCloud2.h"
 
 extern void detectLanes(VideoCapture inputVideo, VideoWriter outputVideo, int houghStrategy);
-extern void detectLanes(sensor_msgs::CompressedImage::ConstPtr msg, HoughTransformHandle* handle, int houghStrategy);
+extern void detectLanes(sensor_msgs::CompressedImage::ConstPtr msg, HoughTransformHandle* handle, VideoWriter &outputVideo, int houghStrategy);
 extern void drawLines(Mat &frame, vector<Line> lines);
 extern Mat plotAccumulator(int nRows, int nCols, int *accumulator);
 
@@ -74,6 +74,9 @@ int main(int argc, char *argv[]) {
     int frameWidth = settings["frameWidth"].as<int>();
     int frameHeight = settings["frameHeight"].as<int>();
 
+    VideoWriter video(argv[2], VideoWriter::fourcc('a', 'v', 'c', '1') , 10,
+                      Size(frameWidth, frameHeight), true);
+
     HoughTransformHandle *handle;
     createHandle(handle, houghStrategy, frameWidth, frameHeight);
     while (ros::ok()) {
@@ -86,7 +89,7 @@ int main(int argc, char *argv[]) {
                 sensor_msgs::CompressedImage::ConstPtr msg = q.front();
                 q.pop();
                 //2 Detect lanes in image
-                detectLanes(msg, handle, houghStrategy);
+                detectLanes(msg, handle, video, houghStrategy);
 
                 //3 Backprojet 2d lines to 3d using camera calibrations + depth
 
@@ -98,6 +101,9 @@ int main(int argc, char *argv[]) {
         }
         ros::spinOnce();
     }
+
+    destroyHandle(handle, houghStrategy);
+
     // // Read input video
     // VideoCapture capture(argv[1]);
     // Check which strategy to use for hough transform (CUDA or sequential)
@@ -118,7 +124,12 @@ int main(int argc, char *argv[]) {
     return 0;
 }
 
-void detectLanes(sensor_msgs::CompressedImage::ConstPtr msg, HoughTransformHandle* handle, int houghStrategy) {
+void detectLanes(
+    sensor_msgs::CompressedImage::ConstPtr msg, 
+    HoughTransformHandle* handle, 
+    VideoWriter& outputVideo,
+    int houghStrategy
+    ) {
     // Convert to OpenCV image
     cv::Mat frame = cv::imdecode(cv::Mat(msg->data), 1);
 
@@ -129,7 +140,7 @@ void detectLanes(sensor_msgs::CompressedImage::ConstPtr msg, HoughTransformHandl
     preProcFrame = applyGaussianBlur(preProcFrame);
     preProcFrame = applyCannyEdgeDetection(preProcFrame);
     preProcFrame = regionOfInterest(preProcFrame);
-    cv::imwrite("roi.png", preProcFrame);
+    // cv::imwrite("roi.png", preProcFrame);
 
     lines.clear();
     if (houghStrategy == CUDA)
@@ -138,7 +149,8 @@ void detectLanes(sensor_msgs::CompressedImage::ConstPtr msg, HoughTransformHandl
         houghTransformSeq(handle, preProcFrame, lines);
 
     drawLines(frame, lines);
-    cv::imwrite("frame.png", frame);
+    // cv::imwrite("frame.png", frame);
+    outputVideo << frame;
 }
 
 /**

@@ -4,11 +4,11 @@
 
 #define THETA_STEP_SIZE 0.1
 #define RHO_STEP_SIZE 2
-#define THRESHOLD 125
+#define THRESHOLD 50 // orig: 125 
 #define THETA_A 45.0
 #define THETA_B 135.0
 #define THETA_VARIATION 16.0
-#define MAX_NUM_LINES 10
+#define MAX_NUM_LINES 4 // orig 10
 
 /**
  * Calculates rho based on the equation r = x cos(θ) + y sin(θ)
