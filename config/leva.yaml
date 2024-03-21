@@ -1,0 +1,13 @@
+topics:
+  left_image:
+    name: "/stereo/left/image_raw/compressed"
+    type: "sensor_msgs/CompressedImage"
+  right_image:
+    name: "/stereo/right/image_raw/compressed"
+    type: "sensor_msgs/CompressedImage"
+  # os1:
+  #   name: "/ouster/points"
+  #   type: "sensor_msgs/PointCloud2"
+houghStrategy: "cuda"
+frameWidth: 960
+frameHeight: 600

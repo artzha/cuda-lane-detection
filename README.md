@@ -22,7 +22,7 @@ You will need to compile and run the program within the docker container using t
 The program can be compiled on the Linux lab machines using the following command:
 
 ```
-bash bash/compile_cuda.sh
+bash bash/compile_lanedet.sh
 ```
 
 ## Running
@@ -34,5 +34,5 @@ Additionally, we can add either a `--cuda` flag to use the CUDA implementation o
 Therefore, in order to run it for the test video provided in the repository we can use the following command.
 
 ```
-./LaneDetection.out ./test-video.mp4 ./result-video.avi --cuda
+bash bash/run_lanedet.sh
 ```

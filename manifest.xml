@@ -1,0 +1,19 @@
+<package>
+  <description brief="cudalanedet">
+
+    Hough Transform based lane detector
+
+  </description>
+  <name>cudalanedet</name>
+  <author>Arthur K. Zhang</author>
+  <license>MIT</license>
+  <review status="unreviewed" notes=""/>
+  <url></url>
+  <!-- <depend package="nav_msgs"/>
+  <depend package="geometry_msgs"/>
+  <depend package="visualization_msgs"/> -->
+  <depend package="sensor_msgs"/>
+  <depend package="roscpp"/>
+  <depend package="rosbag"/>
+  <depend package="tf"/>
+</package>
