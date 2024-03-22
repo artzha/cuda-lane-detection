@@ -11,10 +11,12 @@
 #include "sensor_msgs/CompressedImage.h"
 #include "sensor_msgs/PointCloud2.h"
 
-extern void detectLanes(VideoCapture inputVideo, VideoWriter outputVideo, int houghStrategy);
+// extern void detectLanes(VideoCapture inputVideo, VideoWriter outputVideo, int houghStrategy);
 extern void detectLanes(sensor_msgs::CompressedImage::ConstPtr msg, HoughTransformHandle* handle, int houghStrategy);
 extern void drawLines(Mat &frame, vector<Line> lines);
 extern Mat plotAccumulator(int nRows, int nCols, int *accumulator);
+
+
 
 std::map<std::string, std::queue<sensor_msgs::CompressedImage::ConstPtr>> imageQueues;
 // std::map<std::string, std::queue<sensor_msgs::PointCloud2::ConstPtr>> cloudQueues;
@@ -69,6 +71,7 @@ int main(int argc, char *argv[]) {
     // }
     imageQueues["/stereo/left/image_raw/compressed"] =  std::queue<sensor_msgs::CompressedImage::ConstPtr>();
     ros::Subscriber sub = nh.subscribe<sensor_msgs::CompressedImage>("/stereo/left/image_raw/compressed", 10, imageCallback);
+    ros::Publisher  pub = nh.advertise<sensor_msgs::PointCloud2>("/detected_lanes", 10);
 
     int houghStrategy = settings["houghStrategy"].as<std::string>() == "cuda" ? CUDA : SEQUENTIAL;
     int frameWidth = settings["frameWidth"].as<int>();
@@ -83,16 +86,21 @@ int main(int argc, char *argv[]) {
             if (!q.empty()) {
                 std::cout << "Processing image from " << kv.first << "\n";
                 ROS_INFO("Processing image from %s", topicName.c_str());
-                sensor_msgs::CompressedImage::ConstPtr msg = q.front();
+                sensor_msgs::CompressedImage::ConstPtr img_msg = q.front();
                 q.pop();
                 //2 Detect lanes in image
-                detectLanes(msg, handle, houghStrategy);
+                detectLanes(img_msg, handle, houghStrategy);
 
                 //3 Backprojet 2d lines to 3d using camera calibrations + depth
+                
 
                 //4 Convert lane detection to GM format [Ji-Hwan]
+                
 
                 //5 Publish detected lanes over ROS [Ji-Hwan]
+                sensor_msgs::msg::PointCloud2 pc_msg;
+
+                pub.publish(pc_msg);
 
             }
         }
@@ -149,6 +157,8 @@ void detectLanes(sensor_msgs::CompressedImage::ConstPtr msg, HoughTransformHandl
  * @param outputVideo Video where results are written to
  * @param houghStrategy Strategy which should be used to parform hough transform
  */
+
+ /*
 void detectLanes(VideoCapture inputVideo, VideoWriter outputVideo, int houghStrategy) {
     Mat frame, preProcFrame;
     vector<Line> lines;
@@ -213,6 +223,7 @@ void detectLanes(VideoCapture inputVideo, VideoWriter outputVideo, int houghStra
     // size_t end_t = clock();
     // cout << "Average in FPS: " << inputVideo.get(CAP_PROP_FRAME_COUNT) / ((double)(end_t - start_t) / CLOCKS_PER_SEC) << endl;
 }
+*/
 
 /** Draws given lines onto frame */
 void drawLines(Mat &frame, vector<Line> lines) {
@@ -239,4 +250,138 @@ Mat plotAccumulator(int nRows, int nCols, int *accumulator) {
   	}
 
     return plotImg;
+}
+
+
+
+
+/**
+ * Convert lines to uvd coordinates in pixel space with depth information.
+ *
+ * @param lines Vector to which found lines are added to (N, 2)
+ * @return uvd Coordinates of the projection point in pixel space (N, 3)
+ */
+void convert_lines_to_uvd(vector<Line> lines, vector<cv::Point3f> uvd) {
+
+}
+
+
+/**
+ * REFERENCE — https://www.fdxlabs.com/calculate-x-y-z-real-world-coordinates-from-a-single-camera-using-opencv/
+ * Project 2D points in pixel space to 3D points in world coordinate space.
+ *
+ * @param uvd Coordinates of the projection point in pixel space (N, 3)
+ * @param T_cam_to_lid Homogeneous transformation matrix from camera to lidar (4, 4)
+ * @return xyz - coordinates of a 3D point in the world coordinate space (N, 4)
+ */
+vector<cv::Point3f> convert_uvd_to_xyz(vector<cv::Point3f> uvd) {
+    
+    cv::Mat uvd_mat = convert_vec_to_mat(uvd).t();    // (4, N)
+    YAML::Node config = YAML::LoadFile("cam.yaml");
+    cv::Mat K = config["intrinsic_matrix"].as<cv::Mat>(); // (3, 4) Camera intrinsic matrix
+    cv::Mat C = cv::Mat::eye(4, 3, CV_32F);           // (4, 3) Canonical form of matrix
+
+    cv::Mat K_inv = K.inv();
+    cv::Mat xyz_mat = K_inv * uvd_mat;
+
+    vector<cv::Point3f> xyz = convert_mat_to_vec(xyz_mat.t()); // (N, 3)
+
+    return xyz
+}
+
+/**
+ * REFERENCE https://learnopencv.com/rotation-matrix-to-euler-angles/
+ * Calculates rotation matrix given euler angles. ZYX rotation order.
+ *
+ */
+cv::Mat eulerAnglesToRotationMatrix(cv::Vec3f &theta) {
+    // Calculate rotation about x axis
+    cv::Mat R_x = (cv::Mat_<float>(3,3) <<
+               1,       0,              0,
+               0,       cos(theta[0]),   -sin(theta[0]),
+               0,       sin(theta[0]),   cos(theta[0])
+               );
+ 
+    // Calculate rotation about y axis
+    cv::Mat R_y = (cv::Mat_<float>(3,3) <<
+               cos(theta[1]),    0,      sin(theta[1]),
+               0,               1,      0,
+               -sin(theta[1]),   0,      cos(theta[1])
+               );
+ 
+    // Calculate rotation about z axis
+    cv::Mat R_z = (cv::Mat_<float>(3,3) <<
+               cos(theta[2]),    -sin(theta[2]),      0,
+               sin(theta[2]),    cos(theta[2]),       0,
+               0,               0,                  1);
+ 
+    // Combined rotation matrix
+    cv::Mat R = R_z * R_y * R_x;
+ 
+    return R;
+}
+
+cv::Mat buildHomogeneousMatrix(cv::Point3f trans, cv::Vec3f theta) {
+    cv::Mat T = cv::Mat::eye(4, 4, CV_32F);
+    
+    // Translation
+    T.at<float>(0, 3) = trans.x;
+    T.at<float>(1, 3) = trans.y;
+    T.at<float>(2, 3) = trans.z;
+
+    // Rotation
+    cv::Mat R = eulerAnglesToRotationMatrix(theta);
+    
+    R.copyTo(T(cv::Rect(0, 0, 3, 3)));    
+
+    return T
+}
+
+/*HELPER FUNCTIONS*/
+cv::Mat convert_vec_to_mat(const vector<cv::Point3f>& xyz) {
+    cv::Mat mat(xyz.size(), 1, CV_32FC3);
+    for (int i = 0; i < xyz.size(); i++) {
+        mat.at<cv::Vec3f>(i, 0) = cv::Vec3f(xyz[i].x, xyz[i].y, xyz[i].z, 1);
+    }
+    return mat; // (N, 4)
+}
+
+vector<cv::Point3f> convert_mat_to_vec(const cv::Mat& mat) {
+    vector<cv::Point3f> xyz;
+    for (int i = 0; i < mat.rows; i++) {
+        cv::Vec3f point = mat.at<cv::Vec3f>(i, 0);
+        xyz.push_back(cv::Point3f(point[0], point[1], point[2]));
+    }
+    return xyz; // (N, 3)
+}
+
+/**
+ * Project 3D points in world coordinate space to 3D points in GM coordinate space.
+ *
+ * @param xyz Coordinates of a 3D point of lanes in the world coordinate space (N, 4)
+ * @return xyz_GM Coordinates of a 3D point of lanes in the GM coordinate space (N, 4)
+ */
+vector<cv::Point3f> convert_world_to_gm(vector<cv::Point3f> xyz) {
+
+    cv::Mat xyz_mat = convert_vec_to_mat(xyz).t(); // (4, N)
+    
+    cv::Point3f trans_XX = cv::Point3f(0, 0, 0);
+    cv::Vec3f theta_XX = cv::Vec3f(0, 0, 0);
+
+    cv::Point3f trans_YY = cv::Point3f(0, 0, 0);
+    cv::Vec3f theta_YY = cv::Vec3f(0, 0, 0);
+    
+    cv::Point3f trans_ZZ = cv::Point3f(0, 0, 0);
+    cv::Vec3f theta_ZZ = cv::Vec3f(0, 0, 0);
+    
+
+    cv::Mat T_XX = buildHomogeneousMatrix(trans_XX, theta_XX)
+    cv::Mat T_YY = buildHomogeneousMatrix(trans_YY, theta_YY)
+    cv::Mat T_ZZ = buildHomogeneousMatrix(trans_ZZ, theta_ZZ)
+
+    cv::Mat xyz_GM_mat = T_ZZ * T_YY * T_XX * xyz_mat;
+
+    vector<cv::Point3f> xyz_GM = convert_mat_to_vec(xyz_GM_mat.t()); // (N, 3)
+
+    return xyz_GM;
 }
