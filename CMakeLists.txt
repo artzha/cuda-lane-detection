@@ -7,8 +7,8 @@ MESSAGE(STATUS "Using compiler: ${CMAKE_CXX_COMPILER}")
 MESSAGE(STATUS "Build Type: ${CMAKE_BUILD_TYPE}")
 MESSAGE(STATUS "Arch: ${CMAKE_SYSTEM_PROCESSOR}")
 
-SET(CMAKE_CUDA_FLAGS "")
-SET(CMAKE_CXX_FLAGS "-std=c++14 -Wall -Werror -Wno-unknown-pragmas")
+SET(CMAKE_CUDA_FLAGS "-std=c++14")
+SET(CMAKE_CXX_FLAGS "-std=c++14 -Wall -Wno-unknown-pragmas -Werror")
 SET(CMAKE CXX_STANDARD_REQUIRED True)
 
 IF(${CMAKE_BUILD_TYPE} MATCHES "Release")
@@ -21,10 +21,22 @@ ENDIF()
 
 FIND_PACKAGE(CUDA REQUIRED)
 FIND_PACKAGE(OpenCV REQUIRED)
+FIND_PACKAGE(PCL 1.10 REQUIRED)
+
+include_directories(${PCL_INCLUDE_DIRS})
+link_directories(${PCL_LIBRARY_DIRS})
+add_definitions(${PCL_DEFINITIONS})
+message(STATUS "PCL Definitions: ${PCL_DEFINITIONS}")
 
 INCLUDE_DIRECTORIES(include
         ${OpenCV_INCLUDE_DIRS}
-        ${CUDA_INCLUDE_DIRS})
+        ${CUDA_INCLUDE_DIRS}
+        # ${PCL_INCLUDE_DIRS}
+)
+
+# LINK_DIRECTORIES(include
+#         ${PCL_INCLUDE_DIRS}
+# )
 
 INCLUDE($ENV{ROS_ROOT}/core/rosbuild/rosbuild.cmake)
 ROSBUILD_INIT()
@@ -40,17 +52,16 @@ SET(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin)
 
 SET(libs roslib roscpp rosbag glog gflags boost_system lua5.1
     pthread ${OpenCV_LIBS} yaml-cpp) 
-    # ${CUDA_LIBRARIES})
 
-set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS};-gencode arch=compute_75,code=sm_75)
-set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS};-std=c++14)
+set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS}; -gencode arch=compute_75,code=sm_75 )
+set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS}; -std=c++14)
 
-CUDA_ADD_LIBRARY(houghtransformlib "HoughTransform.cu")
-
+# CUDA_ADD_LIBRARY(houghtransformlib "HoughTransform.cu")
+ADD_LIBRARY(houghtransformlib "HoughTransform.cu")
 
 ROSBUILD_ADD_EXECUTABLE(cudalanedet
                         LaneDetection.cpp
                         Line.cpp
                         Preprocessing.cpp)
 SET_TARGET_PROPERTIES(cudalanedet PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
-TARGET_LINK_LIBRARIES(cudalanedet houghtransformlib ${libs})
+TARGET_LINK_LIBRARIES(cudalanedet houghtransformlib ${libs} ${PCL_LIBRARIES})

@@ -18,3 +18,16 @@ double Line::getX(double y) {
         
     return (rho - y * sin(thetaRadian)) / cos(thetaRadian);
 }
+
+
+LineAnchors::LineAnchors(size_t num_anchors) {
+    this->anchors = vector<cv::Point3f>(num_anchors, cv::Point3f(0, 0, 0));
+}
+
+size_t LineAnchors::getNumAnchors() {
+    return this->anchors.size();
+}
+
+void LineAnchors::addAnchor(cv::Point3f anchor) {
+    this->anchors.push_back(anchor);
+}

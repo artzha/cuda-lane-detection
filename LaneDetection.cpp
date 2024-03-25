@@ -11,13 +11,35 @@
 #include "sensor_msgs/CompressedImage.h"
 #include "sensor_msgs/PointCloud2.h"
 
+extern void convert_lines_to_uvd(
+    const vector<Line>& lines, 
+    const sensor_msgs::PointCloud2::ConstPtr cloud_msg, 
+    const cv::Mat& T_lidar2pixel, 
+    const size_t height,
+    const size_t width,
+    vector<LineAnchors> &uvd);
+extern void convert_uvd_to_xyz(
+    const vector<LineAnchors>& uvd,
+    const cv::Mat& T_uvd2xyz,
+    vector<LineAnchors>& xyz
+);
 extern void detectLanes(VideoCapture inputVideo, VideoWriter outputVideo, int houghStrategy);
-extern void detectLanes(sensor_msgs::CompressedImage::ConstPtr msg, HoughTransformHandle* handle, VideoWriter &outputVideo, int houghStrategy);
+extern vector<Line> detectLanes(sensor_msgs::CompressedImage::ConstPtr msg, HoughTransformHandle* handle, VideoWriter &outputVideo, int houghStrategy);
 extern void drawLines(Mat &frame, vector<Line> lines);
 extern Mat plotAccumulator(int nRows, int nCols, int *accumulator);
 
+// Function to convert a vector to a cv::Mat
+extern cv::Mat vectorToMat(const std::vector<double>& vec, int rows, int cols) {
+    cv::Mat mat(rows, cols, CV_64F); // Assuming double precision; adjust the type if necessary
+    std::memcpy(mat.data, vec.data(), vec.size() * sizeof(double));
+    return mat;
+}
+
+std::string IMAGE_TOPIC = "/ecocar/stereo/left/image_raw/compressed";
+std::string CLOUD_TOPIC = "/ecocar/ouster/lidar_packets";
+
 std::map<std::string, std::queue<sensor_msgs::CompressedImage::ConstPtr>> imageQueues;
-// std::map<std::string, std::queue<sensor_msgs::PointCloud2::ConstPtr>> cloudQueues;
+std::queue<sensor_msgs::PointCloud2::ConstPtr> cloudQueue;
 
 template<typename T>
 void callback(const typename T::ConstPtr& msg, const std::string& topicName) {
@@ -28,10 +50,17 @@ void callback(const typename T::ConstPtr& msg, const std::string& topicName) {
 }
 
 void imageCallback(const sensor_msgs::CompressedImage::ConstPtr& msg) {
-    auto& q = imageQueues["/stereo/left/image_raw/compressed"];
+    auto& q = imageQueues[IMAGE_TOPIC];
     q.push(msg);
-    ROS_INFO("Message received on /stereo/left/image_raw/compressed");
+    ROS_INFO("Message received on %s", IMAGE_TOPIC.c_str());
 }
+
+void cloudCallback(const sensor_msgs::PointCloud2::ConstPtr& msg) {
+    auto& q = cloudQueue;
+    q.push(msg);
+    ROS_INFO("Message received on %s", CLOUD_TOPIC.c_str());
+}
+
 
 int main(int argc, char *argv[]) {
     if (argc < 3) {
@@ -51,24 +80,11 @@ int main(int argc, char *argv[]) {
     ros::init(argc, argv, "lane_detection");
     ros::NodeHandle nh;
 
-    //Setup image callbacks
-    // for (const auto& kv : settings["topics"]) {
-    //     const YAML::Node& topic_info = kv.second;
-    //     std::string topicName = topic_info["name"].as<std::string>();
-    //     std::string topicType = topic_info["type"].as<std::string>();
-    
-    //     // if (topicType == "sensor_msgs/PointCloud2") {
-    //     //     imageQueues[topicName] = std::queue<sensor_msgs::PointCloud2::ConstPtr>();
-    //     //     ros::Subscriber sub = nh.subscribe<sensor_msgs::PointCloud2>(topicName, 10, std::bind(callback<sensor_msgs::PointCloud2>, std::placeholders::_1, topicName));
-    //     // } 
-    //     if (topicType == "sensor_msgs/CompressedImage") {
-    //         imageQueues[topicName] =  std::queue<sensor_msgs::CompressedImage::ConstPtr>();
-    //         ros::Subscriber sub = nh.subscribe<sensor_msgs::CompressedImage>(topicName, 10, std::bind(callback<sensor_msgs::CompressedImage>, std::placeholders::_1, topicName));
-    //         std::cout << "Subscribed to " << topicName << std::endl;
-    //     } // Add more else if blocks for other types
-    // }
-    imageQueues["/stereo/left/image_raw/compressed"] =  std::queue<sensor_msgs::CompressedImage::ConstPtr>();
-    ros::Subscriber sub = nh.subscribe<sensor_msgs::CompressedImage>("/stereo/left/image_raw/compressed", 10, imageCallback);
+    imageQueues[IMAGE_TOPIC] =  std::queue<sensor_msgs::CompressedImage::ConstPtr>();
+    ros::Subscriber imageSub = nh.subscribe<sensor_msgs::CompressedImage>(IMAGE_TOPIC, 10, imageCallback);
+    ros::Subscriber cloudSub = nh.subscribe<sensor_msgs::PointCloud2>(CLOUD_TOPIC, 10, cloudCallback);
+
+    ros::Publisher  pub = nh.advertise<sensor_msgs::PointCloud2>("/leva/detected_lanes", 10);
 
     int houghStrategy = settings["houghStrategy"].as<std::string>() == "cuda" ? CUDA : SEQUENTIAL;
     int frameWidth = settings["frameWidth"].as<int>();
@@ -77,25 +93,74 @@ int main(int argc, char *argv[]) {
     VideoWriter video(argv[2], VideoWriter::fourcc('a', 'v', 'c', '1') , 10,
                       Size(frameWidth, frameHeight), true);
 
+    // Load LiDAR Camera calibrations. 
+    std::string lidar2cam0_fpath = "/robodata/ecocar_logs/processed/CACCDataset/calibrations/44/calib_os1_to_cam0.yaml";
+    std::string lidar2cam1_fpath = "/robodata/ecocar_logs/processed/CACCDataset/calibrations/44/calib_os1_to_cam1.yaml";
+    
+    YAML::Node config_lidar2cam0 = YAML::LoadFile(lidar2cam0_fpath);
+    YAML::Node config_lidar2cam1 = YAML::LoadFile(lidar2cam1_fpath);
+
+    
+    auto K_lidar2cam0_vec = config_lidar2cam0["extrinsic_matrix"]["data"].as<std::vector<double>>();
+    auto K_lidar2cam1_vec = config_lidar2cam1["extrinsic_matrix"]["data"].as<std::vector<double>>();
+    auto K_lidar2cam0 = vectorToMat(K_lidar2cam0_vec, 4, 4);
+    auto K_lidar2cam1 = vectorToMat(K_lidar2cam1_vec, 4, 4);
+
+    // Compute LiDAR to pixel matrix, Compute pixel to LiDAR Matrix
+    cv::Mat T_lidar2pixel;
+    cv::Mat T_pixel2lidar;
+
     HoughTransformHandle *handle;
     createHandle(handle, houghStrategy, frameWidth, frameHeight);
     while (ros::ok()) {
         for (auto& kv : imageQueues) {
             std::string topicName = kv.first;
-            auto& q = kv.second;
-            if (!q.empty()) {
+            auto& imageQueue = kv.second;
+            if (!imageQueue.empty() && !cloudQueue.empty()) {
+                //1 Get timestamps for image and cloud
+                ros::Time cloud_time = cloudQueue.front()->header.stamp;
+                ros::Time image_time = imageQueue.front()->header.stamp;
+
+                //2 Check if timestamps are within a certain threshold
+                if (abs(cloud_time.toSec() - image_time.toSec()) > 0.1) {
+                    ROS_WARN("Timestamps are not in sync. Skipping older frame");
+                    ROS_WARN("Cloud: %f, Image: %f", cloud_time.toSec(), image_time.toSec());
+                    if (cloud_time.toSec() > image_time.toSec()) {
+                        imageQueue.pop();
+                    } else {    
+                        cloudQueue.pop();
+                    }
+                    continue;
+                }
+
                 std::cout << "Processing image from " << kv.first << "\n";
                 ROS_INFO("Processing image from %s", topicName.c_str());
-                sensor_msgs::CompressedImage::ConstPtr msg = q.front();
-                q.pop();
+                sensor_msgs::CompressedImage::ConstPtr img_msg = imageQueue.front();
+                sensor_msgs::PointCloud2::ConstPtr cloud_msg = cloudQueue.front();
+                imageQueue.pop();
+                cloudQueue.pop();
+                
                 //2 Detect lanes in image
-                detectLanes(msg, handle, video, houghStrategy);
+                auto lines = detectLanes(img_msg, handle, video, houghStrategy);
 
-                //3 Backprojet 2d lines to 3d using camera calibrations + depth
+                //3 Compute line anchor depths from lidar
+                vector<LineAnchors> uvd;
+                convert_lines_to_uvd(
+                    lines, cloud_msg, T_lidar2pixel, frameHeight, frameWidth, uvd
+                );
 
-                //4 Convert lane detection to GM format [Ji-Hwan]
+                //4 Backprojet 2d lines to 3d using camera calibrations + depth
+                vector<LineAnchors> xyz;
+                convert_uvd_to_xyz(uvd, T_pixel2lidar, xyz);
+                
+                //5 Convert lane detection to GM format [Ji-Hwan]
+                // vector<cv::Point3f> xyz_GM = convert_world_to_gm(xyz)
 
                 //5 Publish detected lanes over ROS [Ji-Hwan]
+                // sensor_msgs::msg::PointCloud2 pc_msg;
+                // // TODO: FILL pc_msg with xyz_GM
+                // pc_msg  
+                // pub.publish(pc_msg);
 
             }
         }
@@ -124,7 +189,7 @@ int main(int argc, char *argv[]) {
     return 0;
 }
 
-void detectLanes(
+vector<Line> detectLanes(
     sensor_msgs::CompressedImage::ConstPtr msg, 
     HoughTransformHandle* handle, 
     VideoWriter& outputVideo,
@@ -151,79 +216,8 @@ void detectLanes(
     drawLines(frame, lines);
     // cv::imwrite("frame.png", frame);
     outputVideo << frame;
-}
-
-/**
- * Coordinates the lane detection using the specified hough strategy for the 
- * given input video and writes resulting video to output video
- * 
- * @param inputVideo Video for which lanes are detected
- * @param outputVideo Video where results are written to
- * @param houghStrategy Strategy which should be used to parform hough transform
- */
-void detectLanes(VideoCapture inputVideo, VideoWriter outputVideo, int houghStrategy) {
-    Mat frame, preProcFrame;
-    vector<Line> lines;
-
-    clock_t readTime = 0;
-	clock_t prepTime = 0;
-	clock_t houghTime = 0;
-	clock_t writeTime = 0;
-    clock_t totalTime = -clock();
-
-    int frameWidth = inputVideo.get(CAP_PROP_FRAME_WIDTH);
-    int frameHeight = inputVideo.get(CAP_PROP_FRAME_HEIGHT);
-
-    HoughTransformHandle *handle;
-    createHandle(handle, houghStrategy, frameWidth, frameHeight);
-
-    cout << "Processing video " << (houghStrategy == CUDA ? "using CUDA" : "Sequentially") << endl;
-
-	for( ; ; ) {
-        // Read next frame
-        readTime -= clock();
-		inputVideo >> frame;
-        readTime += clock();
-		if(frame.empty())
-			break;
-
-        // Apply pre-processing steps
-        prepTime -= clock();
-        preProcFrame = filterLanes(frame);
-        preProcFrame = applyGaussianBlur(preProcFrame);
-        preProcFrame = applyCannyEdgeDetection(preProcFrame);
-        preProcFrame = regionOfInterest(preProcFrame);
-        prepTime += clock();
-
-        // Perform hough transform
-        houghTime -= clock();
-        lines.clear();
-        if (houghStrategy == CUDA)
-            houghTransformCuda(handle, preProcFrame, lines);
-        else if (houghStrategy == SEQUENTIAL)
-            houghTransformSeq(handle, preProcFrame, lines);
-        houghTime += clock();
-
-        // Draw lines to frame and write to output video
-        writeTime -= clock();
-        drawLines(frame, lines);
-        outputVideo << frame;
-        writeTime += clock();
-    }
-
-    destroyHandle(handle, houghStrategy);
-
-    totalTime += clock();
-	cout << "Read\tPrep\tHough\tWrite\tTotal (s)" << endl;
-	cout << setprecision (4)<<(((float) readTime) / CLOCKS_PER_SEC) << "\t"
-         << (((float) prepTime) / CLOCKS_PER_SEC) << "\t"
-		 << (((float) houghTime) / CLOCKS_PER_SEC) << "\t"
-		 << (((float) writeTime) / CLOCKS_PER_SEC) << "\t"
-    	 << (((float) totalTime) / CLOCKS_PER_SEC) << endl;
-    cout << "Number of frames " << inputVideo.get(CAP_PROP_FRAME_COUNT) << endl;    
-    cout << "Hough average FPS: " << inputVideo.get(CAP_PROP_FRAME_COUNT) / ((double) (houghTime+prepTime) / CLOCKS_PER_SEC) << endl;
-    // size_t end_t = clock();
-    // cout << "Average in FPS: " << inputVideo.get(CAP_PROP_FRAME_COUNT) / ((double)(end_t - start_t) / CLOCKS_PER_SEC) << endl;
+    
+    return lines;
 }
 
 /** Draws given lines onto frame */
@@ -252,3 +246,167 @@ Mat plotAccumulator(int nRows, int nCols, int *accumulator) {
 
     return plotImg;
 }
+
+/**
+ * Convert lines to uvd coordinates in pixel space with depth information.
+ *
+ * @param lines Vector to which found lines are added to (N, 2)
+ * @param lidar_fpath Path to the lidar data file
+ * @param lidar2cam0_fpath Path to the lidar to camera extrinsic matrix
+ * @param lidar2cam1_fpath Path to the lidar to camera extrinsic matrix
+ * @return uvd Coordinates of the projection point in pixel space (N, 3)
+ */
+void convert_lines_to_uvd(
+    const vector<Line>& lines, 
+    const sensor_msgs::PointCloud2::ConstPtr cloud_msg, 
+    const cv::Mat& T_lidar2pixel, 
+    const size_t height,
+    const size_t width,
+    vector<LineAnchors> &uvd) {
+
+    // pcl::PCLPointCloud2 pcl_pc2;
+    // pcl_conversions::toPCL(*cloud_msg, pcl_pc2);
+    // pcl::PointCloud<pcl::PointXYZ>::Ptr temp_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+    // pcl::fromPCLPointCloud2(pcl_pc2,*temp_cloud);
+
+    // //0 Uniformly sample points along each line (u, v)
+
+    // //1 Project lidar to image cooridnate
+    // cv::Mat PC_pixel = T_lidar2pixel * PC_lidar
+
+    // //2 Remove points outside of image
+
+
+    // //3 Remove points behind image
+    
+    // //4 Get closest depth to each line anchor point 
+
+    // //5 Backprojct line anchors to 3D
+
+    // //6 Return L (# of lines) x n (# of anchors) x 3 (coordinates) vector
+
+}
+
+/**
+ * REFERENCE — https://www.fdxlabs.com/calculate-x-y-z-real-world-coordinates-from-a-single-camera-using-opencv/
+ * Project pixel space to world coordinate space.
+ *
+ * @param uvd Coordinates of the projection point in pixel space (N, 3)
+ * @param T_cam_to_lid Homogeneous transformation matrix from camera to lidar (4, 4)
+ * @return xyz - coordinates of a 3D point in the world coordinate space (N, 4)
+ */
+void convert_uvd_to_xyz(
+    const vector<LineAnchors>& uvd,
+    const cv::Mat& T_uvd2xyz,
+    vector<LineAnchors>& xyz
+) {
+    // cv::Mat uvd_mat = convert_vec_to_mat(uvd).t();    // (4, N)
+    // YAML::Node config = YAML::LoadFile("cam.yaml");
+    // cv::Mat K = config["extrinsic_matrix"]["data"].as<cv::Mat>(); // (3, 4) Camera intrinsic matrix
+    // cv::Mat C = cv::Mat::eye(4, 3, CV_32F);           // (4, 3) Canonical form of matrix
+
+    // cv::Mat K_inv = K.inv();
+    // cv::Mat xyz_mat = K_inv * uvd_mat;
+
+    // vector<cv::Point3f> xyz = convert_mat_to_vec(xyz_mat.t()); // (N, 3)
+
+    // return xyz
+}
+
+/**
+ * REFERENCE https://learnopencv.com/rotation-matrix-to-euler-angles/
+ * Calculates rotation matrix given euler angles. ZYX rotation order.
+ *
+ */
+cv::Mat eulerAnglesToRotationMatrix(cv::Vec3f &theta) {
+    // Calculate rotation about x axis
+    cv::Mat R_x = (cv::Mat_<float>(3,3) <<
+               1,       0,              0,
+               0,       cos(theta[0]),   -sin(theta[0]),
+               0,       sin(theta[0]),   cos(theta[0])
+               );
+ 
+    // Calculate rotation about y axis
+    cv::Mat R_y = (cv::Mat_<float>(3,3) <<
+               cos(theta[1]),    0,      sin(theta[1]),
+               0,               1,      0,
+               -sin(theta[1]),   0,      cos(theta[1])
+               );
+ 
+    // Calculate rotation about z axis
+    cv::Mat R_z = (cv::Mat_<float>(3,3) <<
+               cos(theta[2]),    -sin(theta[2]),      0,
+               sin(theta[2]),    cos(theta[2]),       0,
+               0,               0,                  1);
+ 
+    // Combined rotation matrix
+    cv::Mat R = R_z * R_y * R_x;
+ 
+    return R;
+}
+
+cv::Mat buildHomogeneousMatrix(cv::Point3f trans, cv::Vec3f theta) {
+    cv::Mat T = cv::Mat::eye(4, 4, CV_32F);
+    
+    // Translation
+    T.at<float>(0, 3) = trans.x;
+    T.at<float>(1, 3) = trans.y;
+    T.at<float>(2, 3) = trans.z;
+
+    // Rotation
+    cv::Mat R = eulerAnglesToRotationMatrix(theta);
+    
+    R.copyTo(T(cv::Rect(0, 0, 3, 3)));    
+
+    return T;
+}
+
+/*HELPER FUNCTIONS*/
+
+// cv::Mat convert_vec_to_mat(const vector<cv::Point3f>& xyz) {
+//     cv::Mat mat(xyz.size(), 1, CV_32FC3);
+//     for (size_t i = 0; i < xyz.size(); i++) {
+//         mat.at<cv::Vec3f>(i, 0) = cv::Vec3f(xyz[i].x, xyz[i].y, xyz[i].z, 1);
+//     }
+//     return mat; // (N, 4)
+// }
+
+// vector<cv::Point3f> convert_mat_to_vec(const cv::Mat& mat) {
+//     vector<cv::Point3f> xyz;
+//     for (int i = 0; i < mat.rows; i++) {
+//         cv::Vec3f point = mat.at<cv::Vec3f>(i, 0);
+//         xyz.push_back(cv::Point3f(point[0], point[1], point[2]));
+//     }
+//     return xyz; // (N, 3)
+// }
+
+/**
+ * Project 3D points in world coordinate space to 3D points in GM coordinate space.
+ *
+ * @param xyz Coordinates of a 3D point of lanes in the world coordinate space (N, 4)
+ * @return xyz_GM Coordinates of a 3D point of lanes in the GM coordinate space (N, 4)
+ */
+// vector<cv::Point3f> convert_world_to_gm(vector<cv::Point3f> xyz) {
+
+//     cv::Mat xyz_mat = convert_vec_to_mat(xyz).t(); // (4, N)
+    
+//     cv::Point3f trans_XX = cv::Point3f(0, 0, 0);
+//     cv::Vec3f theta_XX = cv::Vec3f(0, 0, 0);
+
+//     cv::Point3f trans_YY = cv::Point3f(0, 0, 0);
+//     cv::Vec3f theta_YY = cv::Vec3f(0, 0, 0);
+    
+//     cv::Point3f trans_ZZ = cv::Point3f(0, 0, 0);
+//     cv::Vec3f theta_ZZ = cv::Vec3f(0, 0, 0);
+    
+
+//     cv::Mat T_XX = buildHomogeneousMatrix(trans_XX, theta_XX)
+//     cv::Mat T_YY = buildHomogeneousMatrix(trans_YY, theta_YY)
+//     cv::Mat T_ZZ = buildHomogeneousMatrix(trans_ZZ, theta_ZZ)
+
+//     cv::Mat xyz_GM_mat = T_ZZ * T_YY * T_XX * xyz_mat;
+
+//     vector<cv::Point3f> xyz_GM = convert_mat_to_vec(xyz_GM_mat.t()); // (N, 3)
+
+//     return xyz_GM;
+// }
