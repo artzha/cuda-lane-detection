@@ -31,3 +31,15 @@ size_t LineAnchors::getNumAnchors() {
 void LineAnchors::addAnchor(cv::Point3f anchor) {
     this->anchors.push_back(anchor);
 }
+
+void LineAnchors::getAnchorsMat(cv::Mat &mat) {
+    
+    size_t num_anchors = this->getNumAnchors();
+   
+    for (size_t i = 0; i < num_anchors; i++) {
+        mat.at<float>(i, 0) = this->anchors[i].x;
+        mat.at<float>(i, 1) = this->anchors[i].y;
+        mat.at<float>(i, 2) = this->anchors[i].z;
+        mat.at<float>(i, 3) = 1;
+    }
+}

@@ -34,4 +34,7 @@ public:
 
     /** Add anchor */
     void addAnchor(cv::Point3f anchor);
+
+    /** Convert anchors to xyz */
+    void getAnchorsMat(cv::Mat &mat);
 };

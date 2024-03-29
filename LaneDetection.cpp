@@ -16,13 +16,14 @@
 #include <opencv2/flann/flann.hpp>
 
 
-extern void convert_lines_to_uvd(
-    vector<Line>& lines, 
+extern void convert_lines_to_xyz(
+    vector<Line>& lines,
     const sensor_msgs::PointCloud2::ConstPtr cloud_msg, 
     const cv::Mat& T_lidar2pixel, 
-    size_t height,
-    size_t width,
-    vector<LineAnchors> &uvd);
+    const cv::Mat& T_pixel2lidar, 
+    const size_t width,
+    const size_t height,
+    vector<LineAnchors> &xyz);
 // extern void convert_uvd_to_xyz(
 //     const vector<LineAnchors>& uvd,
 //     const cv::Mat& T_uvd2xyz,
@@ -144,12 +145,11 @@ int main(int argc, char *argv[]) {
     
     cv::Mat DUMMY = cv::Mat::eye(3, 4, CV_64F);
     cv::Mat T_lidar2pixel = K_cam0 * DUMMY * T_lidar2cam0; // (3,3) x (3, 4) x (4, 4) = (3, 4)
-    
-    cv::Mat tmp = (cv::Mat_<double>(1, 4) << 0, 0, 0, 1);
-    cv::Mat T_lidar2pixel_sq;
-    cv::vconcat(T_lidar2pixel, tmp, T_lidar2pixel_sq);
-    cv::Mat T_pixel2lidar_sq = T_lidar2pixel_sq.inv(); // (4, 4)
-    cv::Mat T_pixel2lidar = T_pixel2lidar_sq.rowRange(0, T_pixel2lidar_sq.rows - 1); // (3, 4)
+
+    DUMMY = cv::Mat::eye(4, 3, CV_64F);
+    cv::Mat K_cam0_inv = K_cam0.inv();
+    cv::Mat T_lidar2cam0_inv = T_lidar2cam0.inv();
+    cv::Mat T_pixel2lidar = T_lidar2cam0_inv * DUMMY * K_cam0_inv; // (4,4) x (4, 3) x (3, 3) = (4, 3)
 
     HoughTransformHandle *handle;
     createHandle(handle, houghStrategy, frameWidth, frameHeight);
@@ -185,14 +185,14 @@ int main(int argc, char *argv[]) {
                 auto lines = detectLanes(img_msg, handle, video, houghStrategy);
 
                 //3 Compute line anchor depths from lidar & backproject 2d lines to 3d
-                vector<LineAnchors> uvd;
-                convert_lines_to_uvd(
-                    lines, cloud_msg, T_lidar2pixel, frameHeight, frameWidth, uvd
+                vector<LineAnchors> xyz;
+                convert_lines_to_xyz(
+                    lines, cloud_msg, T_lidar2pixel, T_pixel2lidar, frameHeight, frameWidth, xyz
                 );
                 
                 //5 Convert lane detection to GM format [Ji-Hwan]
                 vector<cv::Mat> xyz_GM;
-                convert_world_to_gm(uvd, xyz_GM);
+                convert_world_to_gm(xyz, xyz_GM);
                 
                 pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
                 for (const auto& line : xyz_GM) {
@@ -320,12 +320,14 @@ void extractPoints(const sensor_msgs::PointCloud2::ConstPtr& cloud_msg,
     pcl::fromROSMsg(*cloud_msg, *temp_cloud);
     
     // Convert pcl::PointCloud<pcl::PointXYZ> to cv::Mat
-    PC_lidar_mat = cv::Mat(temp_cloud->height, temp_cloud->width, CV_32FC3);
+    // cv::Mat PC_lidar_mat = cv::Mat(temp_cloud->height, temp_cloud->width+1, CV_32FC4);
+    
     for (size_t i = 0; i < temp_cloud->height; i++) {
         for (size_t j = 0; j < temp_cloud->width; j++) {
-            PC_lidar_mat.at<cv::Vec3f>(i, j) = cv::Vec3f(temp_cloud->points[i * temp_cloud->width + j].x,
+            PC_lidar_mat.at<cv::Vec4f>(i, j) = cv::Vec4f(temp_cloud->points[i * temp_cloud->width + j].x,
                                                          temp_cloud->points[i * temp_cloud->width + j].y,
-                                                         temp_cloud->points[i * temp_cloud->width + j].z);
+                                                         temp_cloud->points[i * temp_cloud->width + j].z,
+                                                         1.0);
         }
     }
 }
@@ -383,15 +385,16 @@ void get_closest_depth(const vector<cv::Mat>& sampledPoints_vec,
  * @param T_lidar2pixel transformation matrix from lidar to pixel space (4, 4)
  * @param width width of the image
  * @param height height of the image
- * @return uvd coordinates of the projection point in pixel space with depth information (N, 3)
+ * @return xyz coordinates of the projection point in pixel space with depth information (N, 3)
  */
-void convert_lines_to_uvd(
+void convert_lines_to_xyz(
     vector<Line>& lines,
     const sensor_msgs::PointCloud2::ConstPtr cloud_msg, 
     const cv::Mat& T_lidar2pixel, 
+    const cv::Mat& T_pixel2lidar, 
     const size_t width,
     const size_t height,
-    vector<LineAnchors> &uvd) {
+    vector<LineAnchors> &xyz) {
 
     //0 Uniformly sample points along each line (u, v)
     // n # of Line object
@@ -412,7 +415,7 @@ void convert_lines_to_uvd(
     
     //1 Project lidar to (image) pixel cooridnates
     cv::Mat PC_lidar_mat;
-    extractPoints(cloud_msg, PC_lidar_mat);
+    extractPoints(cloud_msg, PC_lidar_mat); // (N, 4)
     cv::Mat PC_pixel = T_lidar2pixel * PC_lidar_mat;
 
     /* test if PC_lidar contains correct data */
@@ -431,7 +434,7 @@ void convert_lines_to_uvd(
     vector<cv::Mat> indexVector;
     get_closest_depth(sampledPoints_vec, PC_pixel_filtered, indexVector);
         
-    //5 Backproject line anchors to 3D (extract depth from projected lidar points and add to uvd)
+    //5 Backproject line anchors to 3D (extract depth from projected lidar points and add to xyz)
     for (size_t i = 0; i < lines.size(); i++) {
         cv::Mat indices_line = indexVector[i];
         LineAnchors lineAnchors(0);
@@ -445,18 +448,16 @@ void convert_lines_to_uvd(
             
             // Project pixel space to world coordinate space.
             cv::Mat anchor_uvd_mat = (cv::Mat_<float>(1, 3) << anchor_uvd.x, anchor_uvd.y, anchor_uvd.z);
-            cv::Mat T_pixel2lidar = cv::Mat::zeros(4, 3, CV_32F);
             cv::Mat anchor_xyz_mat = T_pixel2lidar * anchor_uvd_mat;
             cv::Point3f anchor_xyz(anchor_xyz_mat.at<float>(0, 0),
                                    anchor_xyz_mat.at<float>(0, 1),
                                    anchor_xyz_mat.at<float>(0, 2));
             lineAnchors.addAnchor(anchor_xyz);
         }
-        uvd.push_back(lineAnchors);
+        xyz.push_back(lineAnchors);
     }
 }
  
-
 /**
  * REFERENCE https://learnopencv.com/rotation-matrix-to-euler-angles/
  * Calculates rotation matrix given euler angles. ZYX rotation order.
@@ -533,64 +534,15 @@ cv::Mat buildHomogeneousMatrix(cv::Point3f trans, cv::Vec3f theta) {
 void convert_world_to_gm(vector<LineAnchors> xyz,
                          vector<cv::Mat>& xyz_GM) {
 
-    // cv::Mat xyz_mat = convert_vec_to_mat(xyz).t(); // (4, N)
-    
-    cv::Point3f trans_XX = cv::Point3f(0, 0, 0);
-    cv::Vec3f theta_XX = cv::Vec3f(0, 0, 0);
+    cv::Point3f trans_lidar2GM = cv::Point3f(0, 0, -1.5);
+    cv::Vec3f theta_lidar2GM = cv::Vec3f(0, 0, 0);
+    cv::Mat T_lidar2GM = buildHomogeneousMatrix(trans_lidar2GM, theta_lidar2GM);
 
-    cv::Point3f trans_YY = cv::Point3f(0, 0, 0);
-    cv::Vec3f theta_YY = cv::Vec3f(0, 0, 0);
-    
-    cv::Point3f trans_ZZ = cv::Point3f(0, 0, 0);
-    cv::Vec3f theta_ZZ = cv::Vec3f(0, 0, 0);
-    
-
-    cv::Mat T_XX = buildHomogeneousMatrix(trans_XX, theta_XX);
-    cv::Mat T_YY = buildHomogeneousMatrix(trans_YY, theta_YY);
-    cv::Mat T_ZZ = buildHomogeneousMatrix(trans_ZZ, theta_ZZ);
-
-    // for each Line
-
-    // cv::Mat xyz_GM_mat = T_ZZ * T_YY * T_XX * xyz_mat;
-
-    // vector<cv::Point3f> xyz_GM = convert_mat_to_vec(xyz_GM_mat.t()); // (N, 3)
+    // for each line (xyz is a vector LineAnchors)
+    for (size_t i = 0; i < xyz.size(); i++) {
+        cv::Mat anchors_GM; // N number of anchors in xyz coord.
+        xyz[i].getAnchorsMat(anchors_GM); // (N, 4)
+        anchors_GM = T_lidar2GM * anchors_GM.t(); // (4, 4) x (4, N) = (4, N)
+        xyz_GM.push_back(anchors_GM.t()); // L x (N, 4)
+    }
 }
-
-// TMP Storage
-// pcl::PCLPointCloud2 PC_lidar;
-// pcl_conversions::toPCL(*cloud_msg, PC_lidar);
-// pcl::PointCloud<pcl::PointXYZ>::Ptr temp_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-// pcl::fromPCLPointCloud2(PC_lidar, *temp_cloud);
-// Convert pcl::PointCloud<pcl::PointXYZ> to cv::Mat
-// cv::Mat PC_lidar_mat(temp_cloud->height, temp_cloud->width, CV_32FC3);
-// for (size_t i = 0; i < temp_cloud->height; i++) {
-//     for (size_t j = 0; j < temp_cloud->width; j++) {
-//         PC_lidar_mat.at<cv::Vec3f>(i, j) = cv::Vec3f(temp_cloud->points[i * temp_cloud->width + j].x,
-//                                                      temp_cloud->points[i * temp_cloud->width + j].y,
-//                                                      temp_cloud->points[i * temp_cloud->width + j].z);
-//     }
-// }
-
-// pcl::KdTreeFLANN<pcl::PointXYZ> kdtree; 
-// kdtree.setInputCloud(temp_cloud_copy);
-// for (const auto& point : sampledPoints) {
-//     pcl::PointXYZ searchPoint;
-//     searchPoint.x = point.x;
-//     searchPoint.y = point.y;
-//     searchPoint.z = 0.0; // Assuming z-coordinate is 0 in pixel space
-
-//     int K = 1; // Number of nearest neighbors to search for
-//     std::vector<int> pointIdxNKNSearch(K);
-//     std::vector<float> pointNKNSquaredDistance(K);
-
-//     if (kdtree.nearestKSearch(searchPoint, K, pointIdxNKNSearch, pointNKNSquaredDistance) > 0) {
-//         // pointIdxNKNSearch[0] contains the index of the closest point in PC_pixel
-//         indexVector.push_back(pointIdxNKNSearch[0]);
-//     }
-// }
-
-
-/*
- * REFERENCE — https://www.fdxlabs.com/calculate-x-y-z-real-world-coordinates-from-a-single-camera-using-opencv/
- * Project pixel space to world coordinate space.
- */
