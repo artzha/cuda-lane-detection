@@ -22,6 +22,9 @@ ENDIF()
 FIND_PACKAGE(CUDA REQUIRED)
 FIND_PACKAGE(OpenCV REQUIRED)
 FIND_PACKAGE(PCL 1.10 REQUIRED)
+FIND_PACKAGE(PkgConfig)
+pkg_check_modules(YAMLCPP REQUIRED yaml-cpp>=0.5)
+include_directories(${YAMLCPP_INCLUDE_DIRS})
 
 include_directories(${PCL_INCLUDE_DIRS})
 link_directories(${PCL_LIBRARY_DIRS})
@@ -65,3 +68,5 @@ ROSBUILD_ADD_EXECUTABLE(cudalanedet
                         Preprocessing.cpp)
 SET_TARGET_PROPERTIES(cudalanedet PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 TARGET_LINK_LIBRARIES(cudalanedet houghtransformlib ${libs} ${PCL_LIBRARIES})
+TARGET_LINK_LIBRARIES(cudalanedet ${YAMLCPP_LIBRARIES})
+
