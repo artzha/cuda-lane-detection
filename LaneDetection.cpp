@@ -347,19 +347,16 @@ void getClosestDepth(const vector<cv::Mat>& sampledPoints_vec,
 void saveDepthImage(const cv::Mat& depthMatrix, const std::string& filename) {
     // Assuming depthMatrix is of size Nx3 where N is the number of points.
     // Each row: [u, v, depth]
-    if (depthMatrix.empty() || depthMatrix.cols != 3) {
-        std::cerr << “Invalid input matrix.” << std::endl;
-        return;
-    }
-    // Find the size of the output image
-    int maxU = 0, maxV = 0;
-    for (int i = 0; i < depthMatrix.rows; i++) {
-        maxU = std::max(maxU, static_cast<int>(depthMatrix.at<float>(i, 0)));
-        maxV = std::max(maxV, static_cast<int>(depthMatrix.at<float>(i, 1)));
-    }
+    // if (depthMatrix.empty() || depthMatrix.cols != 3) {
+    //     std::cerr << "Invalid input matrix." << std::endl;
+    //     return;
+    // }
+
+    int maxU = 960, maxV = 600;
+
     // Create an empty image with the same dimensions as the input matrix.
     // Initialize all pixels to black (depth = 0)
-    cv::Mat depthImage = cv::Mat::zeros(maxV + 1, maxU + 1, CV_8UC1);
+    cv::Mat depthImage = cv::Mat::zeros(maxV, maxU, CV_8UC1);
     // Find min and max depth values to scale depth to 0-255
     double minDepth, maxDepth;
     cv::minMaxIdx(depthMatrix.col(2), &minDepth, &maxDepth);
@@ -370,13 +367,15 @@ void saveDepthImage(const cv::Mat& depthMatrix, const std::string& filename) {
         float depthValue = depthMatrix.at<float>(i, 2);
         // Normalize depth to 0-255 range for visualization
         uchar normalizedDepth = static_cast<uchar>(255 * (depthValue - minDepth) / (maxDepth - minDepth));
-        depthImage.at<uchar>(v, u) = normalizedDepth;
+        // std::cout << "u: " << u << ", v: " << v << ", normalizedDepth: " << depthValue << std::endl;
+
+        depthImage.at<uchar>(u, v) = normalizedDepth;
     }
     // Save the depth image
     if (!cv::imwrite(filename, depthImage)) {
-        std::cerr << “Failed to save the depth image.” << std::endl;
+        std::cerr << "Failed to save the depth image" << std::endl;
     } else {
-        std::cout << “Depth image saved successfully.” << std::endl;
+        std::cout << "Depth image saved successfully." << std::endl;
     }
 }
 
@@ -425,7 +424,6 @@ void convert_lines_to_xyz(
     extractPoints(cloud_msg, PC_lidar_mat); // (N, 4)
     cv::Mat PC_pixel = (T_lidar2pixel * PC_lidar_mat.t()).t(); // (3, 4) x (4, N) = (3, N) - uvd coordinates in pixel space
 
-    saveDepthImage(PC_pixel, "depth.png");
 
     /* test if PC_lidar contains correct data */
     // pcl::io::savePCDFileASCII ("test_pcd.pcd", PC_lidar);
@@ -434,6 +432,8 @@ void convert_lines_to_xyz(
     //2 Remove points outside of images & behind images
     cv::Mat PC_pixel_filtered;
     filterPoints(PC_pixel, width, height, PC_pixel_filtered); // (N, 4)
+    
+    saveDepthImage(PC_pixel_filtered, "depth.png");
 
     /* for debugging */
     // overlay points on image
