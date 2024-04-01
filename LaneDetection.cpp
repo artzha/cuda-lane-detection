@@ -42,6 +42,8 @@ extern cv::Mat vectorToMat(const std::vector<double>& vec, int rows, int cols) {
     return mat;
 };
 
+void saveDepthImage(const cv::Mat& depthMatrix, const std::string& filename);
+
 // DEFINITION OF GLOBAL VARIABLES
 std::string IMAGE_TOPIC = "/ecocar/stereo/left/image_raw/compressed";
 std::string CLOUD_TOPIC = "/ecocar/ouster/lidar_packets";
@@ -342,6 +344,43 @@ void getClosestDepth(const vector<cv::Mat>& sampledPoints_vec,
     }
 }
 
+void saveDepthImage(const cv::Mat& depthMatrix, const std::string& filename) {
+    // Assuming depthMatrix is of size Nx3 where N is the number of points.
+    // Each row: [u, v, depth]
+    if (depthMatrix.empty() || depthMatrix.cols != 3) {
+        std::cerr << “Invalid input matrix.” << std::endl;
+        return;
+    }
+    // Find the size of the output image
+    int maxU = 0, maxV = 0;
+    for (int i = 0; i < depthMatrix.rows; i++) {
+        maxU = std::max(maxU, static_cast<int>(depthMatrix.at<float>(i, 0)));
+        maxV = std::max(maxV, static_cast<int>(depthMatrix.at<float>(i, 1)));
+    }
+    // Create an empty image with the same dimensions as the input matrix.
+    // Initialize all pixels to black (depth = 0)
+    cv::Mat depthImage = cv::Mat::zeros(maxV + 1, maxU + 1, CV_8UC1);
+    // Find min and max depth values to scale depth to 0-255
+    double minDepth, maxDepth;
+    cv::minMaxIdx(depthMatrix.col(2), &minDepth, &maxDepth);
+    // Iterate over the matrix to set pixel values in the depth image
+    for (int i = 0; i < depthMatrix.rows; i++) {
+        int u = static_cast<int>(depthMatrix.at<float>(i, 0));
+        int v = static_cast<int>(depthMatrix.at<float>(i, 1));
+        float depthValue = depthMatrix.at<float>(i, 2);
+        // Normalize depth to 0-255 range for visualization
+        uchar normalizedDepth = static_cast<uchar>(255 * (depthValue - minDepth) / (maxDepth - minDepth));
+        depthImage.at<uchar>(v, u) = normalizedDepth;
+    }
+    // Save the depth image
+    if (!cv::imwrite(filename, depthImage)) {
+        std::cerr << “Failed to save the depth image.” << std::endl;
+    } else {
+        std::cout << “Depth image saved successfully.” << std::endl;
+    }
+}
+
+
 /**
  * Convert lines to uvd coordinates in pixel space with depth information.
  * Returns uvd with LineAnchors type (L (# of lines) x n (# of anchors) x 3 (coordinates) vector)
@@ -385,6 +424,8 @@ void convert_lines_to_xyz(
     cv::Mat PC_lidar_mat(numPoints, 4, CV_32F);
     extractPoints(cloud_msg, PC_lidar_mat); // (N, 4)
     cv::Mat PC_pixel = (T_lidar2pixel * PC_lidar_mat.t()).t(); // (3, 4) x (4, N) = (3, N) - uvd coordinates in pixel space
+
+    saveDepthImage(PC_pixel, "depth.png");
 
     /* test if PC_lidar contains correct data */
     // pcl::io::savePCDFileASCII ("test_pcd.pcd", PC_lidar);
