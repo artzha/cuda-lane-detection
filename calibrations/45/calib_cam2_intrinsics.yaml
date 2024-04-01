@@ -1,0 +1,13 @@
+camera_matrix:
+  cols: 3
+  data: [282.68682122372775, 0.0, 476.386525577773, 0.0, 283.0611294965696, 297.3364986591236,
+    0.0, 0.0, 1.0]
+  rows: 3
+camera_name: fisheye/cam2
+distortion_model: fisheye
+distortion_coefficients:
+  cols: 1
+  data: [-0.007404138828178005, 0.011690333957813465, -0.012572830981089448, 0.0032236104018627774]
+  rows: 4
+image_height: 600
+image_width: 960

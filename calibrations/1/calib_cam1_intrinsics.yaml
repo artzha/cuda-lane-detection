@@ -1,0 +1,14 @@
+camera_matrix:
+  cols: 3
+  data: [721.2520014327042, 0.0, 485.56183584682367, 0.0, 724.5315538915833, 297.6837781910855,
+    0.0, 0.0, 1.0]
+  rows: 3
+camera_name: cam1
+distortion_coefficients:
+  cols: 5
+  data: [-0.06254841129780557, 0.13188079703226163, -0.0005761762888641285, 0.000715721696391943,
+    -0.06787944638637977]
+  rows: 1
+distortion_model: plumb_bob
+image_height: 600
+image_width: 960
