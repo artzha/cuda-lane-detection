@@ -42,8 +42,6 @@ extern cv::Mat vectorToMat(const std::vector<double>& vec, int rows, int cols) {
     return mat;
 };
 
-void saveDepthImage(const cv::Mat& depthMatrix, const std::string& filename);
-
 // DEFINITION OF GLOBAL VARIABLES
 std::string IMAGE_TOPIC = "/ecocar/stereo/left/image_raw/compressed";
 std::string CLOUD_TOPIC = "/ecocar/ouster/lidar_packets";
@@ -80,14 +78,16 @@ void samplePointsAlongLine(const cv::Point& startPoint,
 void extractPoints(const sensor_msgs::PointCloud2::ConstPtr& cloud_msg, 
                    cv::Mat& PC_lidar_mat);
 
-void filterPoints(const cv::Mat& PC_pixel, 
+void filterPoints(const cv::Mat& PC_uvd, 
                   const size_t width, 
                   const size_t height, 
-                  cv::Mat& PC_pixel_filtered);
+                  cv::Mat& PC_uvd_filtered);
 
 void getClosestDepth(const vector<cv::Mat>& sampledPoints_vec, 
-                       const cv::Mat& PC_pixel,
+                       const cv::Mat& PC_uvd,
                        vector<cv::Mat>& indexVector);
+void saveDepthImage(const cv::Mat& depthMatrix, const std::string& filename);
+
 
 // int main_sub(int argc, char *argv[]) {
 int main(int argc, char **argv) {
@@ -284,57 +284,66 @@ void samplePointsAlongLine(const cv::Point& startPoint,
 
 void extractPoints(const sensor_msgs::PointCloud2::ConstPtr& cloud_msg, 
                    cv::Mat& PC_lidar_mat) {
-    // https://docs.ros.org/en/indigo/api/pcl_conversions/html/pcl__conversions_8h_source.html#l00554
     // extract point cloud from message
     pcl::PointCloud<pcl::PointXYZ>::Ptr temp_cloud (new pcl::PointCloud<pcl::PointXYZ>);
     pcl::fromROSMsg(*cloud_msg, *temp_cloud);
     
-    // convert point cloud to cv::Mat
+    // convert point cloud to cv::Mat. temp_cloud - (heigh, width) of (x, y, z)
+    
     for (size_t i = 0; i < temp_cloud->height; i++) {
         for (size_t j = 0; j < temp_cloud->width; j++) {
-            PC_lidar_mat.at<cv::Vec4f>(i * temp_cloud->width + j, 0) = cv::Vec4f(temp_cloud->points[i * temp_cloud->width + j].x,
-                                                                                 temp_cloud->points[i * temp_cloud->width + j].y,
-                                                                                 temp_cloud->points[i * temp_cloud->width + j].z,
-                                                                                 1.0);
+            // PC_lidar_mat.at<cv::Vec4f>(i * temp_cloud->width + j, 0) = cv::Vec4f(temp_cloud->points[i * temp_cloud->width + j].x,
+            //                                                                      temp_cloud->points[i * temp_cloud->width + j].y,
+            //                                                                      temp_cloud->points[i * temp_cloud->width + j].z,
+            //                                                                      1.0);
+            cv::Mat pointMat(1, 3, CV_32F);
+            pointMat.at<float>(0, 0) = temp_cloud->at(j, i).x;
+            pointMat.at<float>(0, 1) = temp_cloud->at(j, i).y;
+            pointMat.at<float>(0, 2) = temp_cloud->at(j, i).z;
+            PC_lidar_mat.row(i * temp_cloud->width + j) = pointMat;
+            // PC_lidar_mat.at<cv::Vec4f>(i, j) = cv::Vec4f(pointMat.at<float>(0, 0),
+            //                                             pointMat.at<float>(0, 1),
+            //                                             pointMat.at<float>(0, 2),
+            //                                             pointMat.at<float>(0, 3));
+            
         }
     }
 }
 
-void filterPoints(const cv::Mat& PC_pixel, 
+void filterPoints(const cv::Mat& PC_uvd, 
                   const size_t width, 
                   const size_t height, 
-                  cv::Mat& PC_pixel_filtered) {
+                  cv::Mat& PC_uvd_filtered) {
 
-    for (int i = 0; i < PC_pixel.rows; i++) {
-        // cv::Vec4f point = cv::Vec4f(PC_pixel.at<cv::Vec3f>(i, 0)[0], PC_pixel.at<cv::Vec3f>(i, 0)[1], PC_pixel.at<cv::Vec3f>(i, 0)[2], 1);
-        float x = PC_pixel.at<cv::Vec3f>(i, 0)[0];
-        float y = PC_pixel.at<cv::Vec3f>(i, 0)[1];
-        float z = PC_pixel.at<cv::Vec3f>(i, 0)[2];
+    for (int i = 0; i < PC_uvd.rows; i++) {
+        // cv::Vec4f point = cv::Vec4f(PC_uvd.at<cv::Vec3f>(i, 0)[0], PC_uvd.at<cv::Vec3f>(i, 0)[1], PC_uvd.at<cv::Vec3f>(i, 0)[2], 1);
+        float u = PC_uvd.at<cv::Vec3f>(i, 0)[0];
+        float v = PC_uvd.at<cv::Vec3f>(i, 0)[1];
+        float d = PC_uvd.at<cv::Vec3f>(i, 0)[2];
 
         // Remove points outside & behind of images
-        if ((x > 0 && x <= width && y > 0 && y <= height && z > 0)) {
-            cv::Mat pointMat = cv::Mat(1, 4, CV_32FC1);
-            pointMat.at<float>(0, 0) = x;
-            pointMat.at<float>(0, 1) = y;
-            pointMat.at<float>(0, 2) = z;
-            pointMat.at<float>(0, 3) = 1;
-            PC_pixel_filtered.push_back(pointMat);
+        if ((u >= 0 && u < width && v >= 0 && v < height && d > 0)) {
+            cv::Mat pointMat = cv::Mat(1, 3, CV_32F);
+            pointMat.at<float>(0, 0) = u;
+            pointMat.at<float>(0, 1) = v;
+            pointMat.at<float>(0, 2) = d;
+            PC_uvd_filtered.push_back(pointMat);
         }
     }
 }
 
 void getClosestDepth(const vector<cv::Mat>& sampledPoints_vec, 
-                       const cv::Mat& PC_pixel,
+                       const cv::Mat& PC_uvd,
                        vector<cv::Mat>& indexVector) {
     
     // create a copy with z-coordinate set to 0
-    cv::Mat PC_pixel_copy = PC_pixel.colRange(0, 3).clone();
-    PC_pixel_copy.col(2) = cv::Scalar(0);
+    cv::Mat PC_uvd_copy = PC_uvd.colRange(0, 3).clone();
+    PC_uvd_copy.col(2) = cv::Scalar(0);
     
     // Use kdtree to get index of the point cloud with the closest depth
     // Create a KD-Tree for the point cloud
     cv::flann::KDTreeIndexParams indexParams;
-    cv::flann::Index kdtree(PC_pixel_copy, indexParams);
+    cv::flann::Index kdtree(PC_uvd_copy, indexParams);
 
     for (const cv::Mat& sampledPoints_mat : sampledPoints_vec) {
         
@@ -347,10 +356,10 @@ void getClosestDepth(const vector<cv::Mat>& sampledPoints_vec,
 void saveDepthImage(const cv::Mat& depthMatrix, const std::string& filename) {
     // Assuming depthMatrix is of size Nx3 where N is the number of points.
     // Each row: [u, v, depth]
-    // if (depthMatrix.empty() || depthMatrix.cols != 3) {
-    //     std::cerr << "Invalid input matrix." << std::endl;
-    //     return;
-    // }
+    if (depthMatrix.empty() || depthMatrix.cols != 3) {
+        std::cerr << "Invalid input matrix." << std::endl;
+        return;
+    }
 
     int maxU = 960, maxV = 600;
 
@@ -419,38 +428,31 @@ void convert_lines_to_xyz(
     
     int numPoints = cloud_msg->width * cloud_msg->height;
 
-    //1 Project lidar to (image) pixel cooridnates
-    cv::Mat PC_lidar_mat(numPoints, 4, CV_32F);
-    extractPoints(cloud_msg, PC_lidar_mat); // (N, 4)
-    cv::Mat PC_pixel = (T_lidar2pixel * PC_lidar_mat.t()).t(); // (3, 4) x (4, N) = (3, N) - uvd coordinates in pixel space
-
-
-    /* test if PC_lidar contains correct data */
-    // pcl::io::savePCDFileASCII ("test_pcd.pcd", PC_lidar);
-    // std::cerr << "Saved " << cloud.size () << " data points to test_pcd.pcd." << std::endl;
+    //1 Project lidar to (image) pixel cooridnates (Need testing)
+    cv::Mat PC_lidar_mat(numPoints, 3, CV_32F);
+    extractPoints(cloud_msg, PC_lidar_mat); // (N, 3)
+    cv::Mat ones = cv::Mat::ones(PC_lidar_mat.rows, 1, CV_32F);
+    cv::hconcat(PC_lidar_mat, ones, PC_lidar_mat); // (N, 3) -> (N, 4)
+    cv::Mat PC_uvd = (T_lidar2pixel * PC_lidar_mat.t()).t(); // (3, 4) x (4, N) = (3, N) -> (N, 3) - uvd coordinates in pixel space
     
     //2 Remove points outside of images & behind images
-    cv::Mat PC_pixel_filtered;
-    filterPoints(PC_pixel, width, height, PC_pixel_filtered); // (N, 4)
+    cv::Mat PC_uvd_filtered;
+    filterPoints(PC_uvd, width, height, PC_uvd_filtered); // (N, 3)
     
-    saveDepthImage(PC_pixel_filtered, "depth.png");
+    saveDepthImage(PC_uvd_filtered, "depth.png");
 
-    /* for debugging */
-    // overlay points on image
-    // cv::imwrite("overlay.png", frame)
-
-    //4 Get closest depth (nearest search) to each line anchor point 
+    //3 Get closest depth (nearest search) to each line anchor point 
     vector<cv::Mat> indexVector;
-    getClosestDepth(sampledPoints_vec, PC_pixel_filtered, indexVector);
+    getClosestDepth(sampledPoints_vec, PC_uvd_filtered, indexVector);
 
-    //5 Backproject line anchors to 3D (extract depth from projected lidar points and add to xyz)
+    //4 Backproject line anchors to 3D (extract depth from projected lidar points and add to xyz)
     for (size_t i = 0; i < lines.size(); i++) {
         cv::Mat indices_line = indexVector[i];
         // LineAnchors lineAnchors(0);
         cv::Mat closestPoints;
         for (int j = 0; j < indices_line.rows; j++) {
             int index = indices_line.at<int>(j, 0);
-            cv::Mat selectedPoint = PC_pixel_filtered.row(index);
+            cv::Mat selectedPoint = PC_uvd_filtered.row(index);
             closestPoints.push_back(selectedPoint);
         }
         
@@ -563,7 +565,7 @@ void convert_world_to_gm(vector<cv::Mat> xyz,
 //     cv::Mat sampledPoints_mat = sampledPoints_vec[i];
 //     cv::Point3f anchor_uvd(sampledPoints_mat.at<float>(j, 0),
 //                            sampledPoints_mat.at<float>(j, 1),
-//                            PC_pixel_filtered.at<float>(index, 2));
+//                            PC_uvd_filtered.at<float>(index, 2));
     
 //     // Project pixel space to world coordinate space.
 //     cv::Mat anchor_uvd_mat = (cv::Mat_<float>(1, 3) << anchor_uvd.x, anchor_uvd.y, anchor_uvd.z);
