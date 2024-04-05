@@ -75,23 +75,18 @@ void samplePointsAlongLine(const cv::Point& startPoint,
                            const cv::Point& endPoint, 
                            int numSamples,
                            cv::Mat& sampledPoints_mat);
-
 void extractPoints(const sensor_msgs::PointCloud2::ConstPtr& cloud_msg, 
                    cv::Mat& PC_lidar_mat);
-
-void filterPoints(const cv::Mat& PC_uvd, 
-                  const size_t width, 
-                  const size_t height, 
-                  cv::Mat& PC_uvd_filtered);
-
-void getClosestDepth(const vector<cv::Mat>& sampledPoints_vec, 
-                       const cv::Mat& PC_uvd,
-                       vector<cv::Mat>& indexVector);
-void saveDepthImage(const cv::Mat& depthMatrix, const std::string& filename);
 void pixels_to_depth(const cv::Mat& pc_np, const cv::Mat& T_lidar_to_pixels, int frameHeight, int frameWidth, cv::Mat& uvd);
+void getClosestDepth(const vector<cv::Mat>& sampledPoints_vec, 
+                     const cv::Mat& PC_uvd,
+                     vector<cv::Mat>& indexVector);
+void saveDepthImage(const cv::Mat& depthMatrix, const std::string& filename);
 
 
 int main(int argc, char **argv) {
+
+    cout << "Started lane detection node" << endl;
 
     YAML::Node settings = YAML::LoadFile("/root/cuda-lane-detection/config/leva.yaml");
 
@@ -287,37 +282,6 @@ void extractPoints(const sensor_msgs::PointCloud2::ConstPtr& cloud_msg,
                 PC_lidar_mat.at<float>(index, 2) = temp_cloud->at(j, i).z;
             }
         }
-
-    // cv::Size matSize = PC_lidar_mat.size();
-    // std::cout << "Dimension of cv_mat: " << matSize.height << " x " << matSize.width << std::endl;
-    // std::cout << "Type of PC_lidar_mat: " << PC_lidar_mat.type() << std::endl;
-        
-    // cv::FileStorage fs("output_test.txt", cv::FileStorage::WRITE);
-    // fs << "PC_lidar_mat" << PC_lidar_mat;
-    // fs.release();
-    // std::cout << "PC_lidar_mat is successfully saved." << std::endl;
-}
-
-void filterPoints(const cv::Mat& PC_uvd, 
-                  const size_t width, 
-                  const size_t height, 
-                  cv::Mat& PC_uvd_filtered) {
-
-    for (int i = 0; i < PC_uvd.rows; i++) {
-        // cv::Vec4f point = cv::Vec4f(PC_uvd.at<cv::Vec3f>(i, 0)[0], PC_uvd.at<cv::Vec3f>(i, 0)[1], PC_uvd.at<cv::Vec3f>(i, 0)[2], 1);
-        float u = PC_uvd.at<cv::Vec3f>(i, 0)[0];
-        float v = PC_uvd.at<cv::Vec3f>(i, 0)[1];
-        float d = PC_uvd.at<cv::Vec3f>(i, 0)[2];
-
-        // Remove points outside & behind of images
-        if ((u >= 0 && u < width && v >= 0 && v < height && d > 0)) {
-            cv::Mat pointMat = cv::Mat(1, 3, CV_32F);
-            pointMat.at<float>(0, 0) = u;
-            pointMat.at<float>(0, 1) = v;
-            pointMat.at<float>(0, 2) = d;
-            PC_uvd_filtered.push_back(pointMat);
-        }
-    }
 }
 
 void getClosestDepth(const vector<cv::Mat>& sampledPoints_vec, 
@@ -357,17 +321,11 @@ void pixels_to_depth(const cv::Mat& pc_np, const cv::Mat& T_lidar_to_pixels, int
     cv::Mat pc_rect_cam = T_lidar_to_pixels * pc_homo.t(); // (3, 4) x (4, N) = (3, N)
     pc_rect_cam = pc_rect_cam.t(); // (N, 3) uvd
 
-
     // Remove points behind camera after coordinate system change
     cv::Mat lidar_pts = pc_rect_cam.clone();
     for (int i = 0; i < lidar_pts.cols-1; i++) {
         lidar_pts.col(i) /= pc_rect_cam.col(pc_rect_cam.cols - 1); // Perspective division - uvd / d
     }
-    // Clip lidar_pts with cv max and min int values
-    // lidar_pts.col(0) = cv::max(cv::min(lidar_pts.col(0), INT_MAX), INT_MIN);
-    // lidar_pts.col(1) = cv::max(cv::min(lidar_pts.col(1), INT_MAX), INT_MIN);
-    // lidar_pts.convertTo(lidar_pts, CV_32S); // (N, 2)
-    // lidar_pts.convertTo(lidar_pts, CV_32FC1); // (N, 2)
 
     for (int i = 0; i < pc_rect_cam.rows; i++) {
         float u = lidar_pts.at<float>(i, 0);
@@ -383,24 +341,6 @@ void pixels_to_depth(const cv::Mat& pc_np, const cv::Mat& T_lidar_to_pixels, int
             uvd.push_back(pointMat);
         }
     }
-
-    // cv::Size matSize = uvd.size();
-    // std::cout << "Dimension of cv_mat: " << matSize.height << " x " << matSize.width << std::endl;
-    // std::cout << "Type of PC_lidar_mat: " << uvd.type() << std::endl;
-        
-    // cv::FileStorage fs("output_test.txt", cv::FileStorage::WRITE);
-    // fs << "uvd" << uvd;
-    // fs.release();
-    // std::cout << "uvd is successfully saved." << std::endl;
-
-    cv::Mat image(frameWidth, frameHeight, CV_8UC3, cv::Scalar(0, 0, 0)); // Create an empty image with the specified width and height
-    for (int i = 0; i < uvd.rows; i++) {
-        int u = static_cast<int>(uvd.at<float>(i, 0));
-        int v = static_cast<int>(uvd.at<float>(i, 1));
-        cv::circle(image, cv::Point(u, v), 5, cv::Scalar(0, 0, 255), -1); // Draw a circle at the specified uv coordinates
-    }
-    // cv::imwrite("image.jpg", image); // Save the image as "image.jpg"
-    // std::cout << "Save the image as image.jpg" << std::endl;
 }
 
 void saveDepthImage(const cv::Mat& depthMatrix, const std::string& filename) {
@@ -475,7 +415,6 @@ void convert_lines_to_xyz(
         sampledPoints_vec.push_back(sampledPoints_mat);
         }
 
-
     //1 Project lidar to (image) pixel cooridnates | TESTED - CONFRIMED
     int numPoints = cloud_msg->width * cloud_msg->height;
     cv::Mat PC_lidar_mat(numPoints, 3, CV_32FC1);
@@ -496,7 +435,6 @@ void convert_lines_to_xyz(
     //4 Backproject line anchors to 3D (extract depth from projected lidar points and add to xyz)
     for (size_t i = 0; i < lines.size(); i++) {
         cv::Mat indices_line = indexVector[i];
-        // LineAnchors lineAnchors(0);
         cv::Mat closestPoints;
         for (int j = 0; j < indices_line.rows; j++) {
             int index = indices_line.at<int>(j, 0);
@@ -505,9 +443,10 @@ void convert_lines_to_xyz(
         }
         
         cv::Mat anchor_uvd_mat = sampledPoints_vec[i].clone();
-        anchor_uvd_mat.col(1) = closestPoints.col(1);
+        anchor_uvd_mat.col(2) = closestPoints.col(2); // extract depth
 
         cv::Mat anchor_xyz_mat = (T_pixels_to_lidar * anchor_uvd_mat.t()).t(); // (4, 3) x (3, n) = (4, n). | (n, 4)
+        anchor_xyz_mat = anchor_xyz_mat.colRange(0, anchor_xyz_mat.cols - 1); // (N, 3)
         xyz.push_back(anchor_xyz_mat);
     }
 }
@@ -545,7 +484,7 @@ cv::Mat eulerAnglesToRotationMatrix(cv::Vec3f &theta) {
 }
 
 cv::Mat buildHomogeneousMatrix(cv::Point3f trans, cv::Vec3f theta) {
-    cv::Mat T = cv::Mat::eye(4, 4, CV_32F);
+    cv::Mat T = cv::Mat::eye(4, 4, CV_32FC1);
     
     // Translation
     T.at<float>(0, 3) = trans.x;
@@ -569,92 +508,33 @@ cv::Mat buildHomogeneousMatrix(cv::Point3f trans, cv::Vec3f theta) {
 void convert_world_to_gm(vector<cv::Mat> xyz,
                          vector<cv::Mat>& xyz_GM) {
 
-    cv::Point3f trans_lidar2GM = cv::Point3f(0, 0, -1.5);
+    cout << "World coordinate space \n" << endl;
+    for (size_t i = 0; i < xyz.size(); i++) {
+        std::cout << "xyz[" << i << "]: " << xyz[i] << std::endl;
+    }
+    cv::Point3f trans_lidar2GM = cv::Point3f(0, 0, 1.5);
     cv::Vec3f theta_lidar2GM = cv::Vec3f(0, 0, 0);
     cv::Mat T_lidar2GM = buildHomogeneousMatrix(trans_lidar2GM, theta_lidar2GM);
 
+    std::cout << "T_lidar2GM: " << T_lidar2GM << std::endl;
+
     for (size_t i = 0; i < xyz.size(); i++) {
-        cv::Mat anchors_GM; // N number of anchors in xyz coord.
-        anchors_GM = T_lidar2GM * xyz[i].t(); // (4, 4) x (4, N) = (4, N)
-        xyz_GM.push_back(anchors_GM.t()); // L x (N, 4)
+        
+        cv::Mat ones = cv::Mat::ones(xyz[i].rows, 1, CV_32FC1);
+        cv::Mat xyz_homo;
+        cv::hconcat(xyz[i], ones, xyz_homo);
+
+         // N number of anchors in xyz coord.
+        cv::Mat anchors_GM = (T_lidar2GM * xyz_homo.t()).t(); // (4, 4) x (4, N) = (4, N)
+        anchors_GM = anchors_GM.colRange(0, anchors_GM.cols - 1); // (N, 3)
+        
+        xyz_GM.push_back(anchors_GM); // L x (N, 3)
     }
+
+    cout << "Converted to GM coordinate space \n" << endl;
+    for (size_t i = 0; i < xyz_GM.size(); i++) {
+        std::cout << "xyz_GM[" << i << "]: " << xyz_GM[i] << std::endl;
+    }
+
+
 }
-
-    // cv::Mat valid_lidar_points, valid_lidar_depth;
-    // cv::Mat z_filtered;
-    // z.copyTo(z_filtered, valid_point_mask);
-    // lidar_pts.copyTo(valid_lidar_points, valid_point_mask);
-
-    // if (IMG_DEBUG_FLAG) {
-    //     cv::Mat test_img = cv::Mat::zeros(frameHeight, frameWidth, CV_8UC1);
-    //     for (int i = 0; i < valid_lidar_points.rows; ++i) {
-    //         int x = valid_lidar_points.at<int>(i, 0);
-    //         int y = valid_lidar_points.at<int>(i, 1);
-    //         test_img.at<uchar>(y, x) = 255;
-    //     }
-    //     cv::imwrite("test.png", test_img);
-    // }
-
-    // // Create LiDAR depth image
-    // cv::Mat depth_image = cv::Mat::zeros(frameHeight, frameWidth, CV_32FC1);
-    // for (int i = 0; i < valid_lidar_points.rows; ++i) {
-    //     int x = valid_lidar_points.at<int>(i, 0);
-    //     int y = valid_lidar_points.at<int>(i, 1);
-    //     depth_image.at<double>(y, x) = z_filtered.at<double>(i);
-    // }
-
-    // if (IMG_DEBUG_FLAG) {
-    //     cv::Mat depth_mm;
-    //     depth_image.convertTo(depth_mm, CV_16U, 1000.0); // Convert to mm
-    //     cv::imwrite("pp_depth_max.png", depth_mm);
-    // }
-
-    // if (return_depth) {
-    //     return depth_image;
-    // } else {
-    //     cv::Mat result = cv::Mat::zeros(valid_lidar_points.rows, 3, CV_32FC1);
-    //     valid_lidar_points.copyTo(result(cv::Rect(0, 0, 2, valid_lidar_points.rows)));
-    //     z_filtered.copyTo(result(cv::Rect(2, 0, 1, valid_lidar_points.rows)));
-    //     return result;
-    // }
-
-    // // convert point cloud to cv::Mat.
-    // for (size_t i = 0; i < temp_cloud->height; i++) {
-    //     for (size_t j = 0; j < temp_cloud->width; j++) {
-    //         PC_lidar_mat.at<cv::Vec3f>(i * temp_cloud->width + j, 0) = cv::Vec3f(temp_cloud->points[i * temp_cloud->width + j].x,
-    //                                                                              temp_cloud->points[i * temp_cloud->width + j].y,
-    //                                                                              temp_cloud->points[i * temp_cloud->width + j].z);
-    //     }
-    // }
-    // cv::FileStorage fs("output.txt", cv::FileStorage::WRITE);
-    // fs << "PC_lidar_mat" << PC_lidar_mat;
-    // fs.release();
-    // // for (size_t i = 0; i < temp_cloud->height; i++) {
-    // //     for (size_t j = 0; j < temp_cloud->width; j++) {
-    // //         cv::Mat pointMat(1, 3, CV_32FC1);
-    // //         pointMat.at<float>(0, 0) = temp_cloud->at(j, i).x;
-    // //         pointMat.at<float>(0, 1) = temp_cloud->at(j, i).y;
-    // //         pointMat.at<float>(0, 2) = temp_cloud->at(j, i).z;
-    // //         PC_lidar_mat.row(i * temp_cloud->width + j) = pointMat;
-    // //     }
-    // // }
-
-    // std::cout << "PC_lidar_mat: " << PC_lidar_mat << std::endl;
-    // std::cout << "Dimension of PC_lidar_mat: " << PC_lidar_mat.size() << std::endl;
-
-
-
-
-
-
-
-
-
-        // cv::Mat ones = cv::Mat::ones(PC_lidar_mat.rows, 1, CV_32FC1);
-    // cv::hconcat(PC_lidar_mat, ones, PC_lidar_mat); // (N, 3) -> (N, 4)
-    // cv::Mat PC_uvd = (T_lidar_to_pixels * PC_lidar_mat.t()).t(); // (3, 4) x (4, N) = (3, N) -> (N, 3) - uvd coordinates in pixel space
-    
-    
-    //2 Remove points outside of images & behind images
-    // cv::Mat PC_uvd_filtered;
-    // filterPoints(PC_uvd, width, height, PC_uvd_filtered); // (N, 3)
