@@ -8,6 +8,6 @@ topics:
   os1:
     name: "/ouster/points"
     type: "sensor_msgs/PointCloud2"
-houghStrategy: "cuda"
+houghStrategy: "sequential"
 frameWidth: 960
 frameHeight: 600
