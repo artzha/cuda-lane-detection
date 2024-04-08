@@ -9,12 +9,14 @@
 #include <Eigen/Dense>
 
 #include "ros/ros.h"
+#include "std_msgs/Header.h"
 #include "sensor_msgs/CompressedImage.h"
 #include "sensor_msgs/PointCloud2.h"
 
 #include <pcl_conversions/pcl_conversions.h>
 #include <opencv2/flann/flann.hpp>
 
+#include <cv_bridge/cv_bridge.h> 
 
 extern void convert_lines_to_xyz(
     vector<Line>& lines,
@@ -24,7 +26,8 @@ extern void convert_lines_to_xyz(
     const cv::Mat& T_pixels_to_lidar, 
     const size_t width,
     const size_t height,
-    vector<cv::Mat> &xyz);
+    vector<cv::Mat> &xyz,
+    cv::Mat &overlay_img);
 extern void convert_world_to_gm(vector<cv::Mat> xyz,
                                 vector<cv::Mat>& xyz_GM);
 extern vector<Line> detectLanes(sensor_msgs::CompressedImage::ConstPtr msg, 
@@ -47,6 +50,8 @@ extern cv::Mat vectorToMat(const std::vector<double>& vec, int rows, int cols) {
 // DEFINITION OF GLOBAL VARIABLES
 std::string IMAGE_TOPIC = "/ecocar/stereo/left/image_raw/compressed";
 std::string CLOUD_TOPIC = "/ecocar/ouster/lidar_packets";
+std::string LANEDET_IMAGE_TOPIC = "/leva/lane_dt/stereo/left/image_raw/compressed";
+std::string LANEDET_CLOUD_TOPIC = "/leva/lane_dt/ouster/lidar_packets";
 
 std::map<std::string, std::queue<sensor_msgs::CompressedImage::ConstPtr>> imageQueues;
 std::queue<sensor_msgs::PointCloud2::ConstPtr> cloudQueue;
@@ -83,7 +88,7 @@ void getClosestDepth(const vector<cv::Mat>& sampledPoints_vec,
                      const cv::Mat& PC_uvd,
                      vector<cv::Mat>& indexVector);
 void saveDepthImage(const cv::Mat& depthMatrix, const std::string& filename);
-void saveImage(cv::Mat image, vector<cv::Mat> sampledPoints_vec, cv::Mat PC_uvd_filtered, const std::string& filename);
+void saveImage(cv::Mat image, vector<cv::Mat> sampledPoints_vec, cv::Mat PC_uvd_filtered, cv::Mat &overlay_img);
 
 
 int main(int argc, char **argv) {
@@ -91,6 +96,7 @@ int main(int argc, char **argv) {
     cout << "Started lane detection node" << endl;
 
     YAML::Node settings = YAML::LoadFile("/root/cuda-lane-detection/config/leva.yaml");
+    // TODO: Enabled reading arbitrary number of image topics from config file
 
     // ROS setup
     ros::init(argc, argv, "lane_detection");
@@ -100,7 +106,8 @@ int main(int argc, char **argv) {
     ros::Subscriber imageSub = nh.subscribe<sensor_msgs::CompressedImage>(IMAGE_TOPIC, 10, imageCallback);
     ros::Subscriber cloudSub = nh.subscribe<sensor_msgs::PointCloud2>(CLOUD_TOPIC, 10, cloudCallback);
 
-    ros::Publisher pub = nh.advertise<sensor_msgs::PointCloud2>("/leva/detected_lanes", 10);
+    ros::Publisher lanedet_image_pub = nh.advertise<sensor_msgs::CompressedImage>(LANEDET_IMAGE_TOPIC, 10);
+    ros::Publisher lanedet_cloud_pub = nh.advertise<sensor_msgs::PointCloud2>(LANEDET_CLOUD_TOPIC, 10);
 
     int houghStrategy = settings["houghStrategy"].as<std::string>() == "cuda" ? CUDA : SEQUENTIAL;
     int frameWidth = settings["frameWidth"].as<int>();
@@ -122,6 +129,8 @@ int main(int argc, char **argv) {
     cv::Mat T_lidar_to_cam_inv = T_lidar_to_cam.inv();
     cv::Mat T_pixels_to_lidar = T_lidar_to_cam_inv * T_canon_inv * K_inv; // (4,4) x (4, 3) x (3, 3) = (4, 3)
 
+    cv_bridge::CvImage img_bridge;
+    sensor_msgs::CompressedImage compressed_img_msg; // >> message to be sent
     HoughTransformHandle *handle;
     createHandle(handle, houghStrategy, frameWidth, frameHeight);
     while (ros::ok()) {
@@ -157,8 +166,9 @@ int main(int argc, char **argv) {
 
                 //3 Compute line anchor depths from lidar & backproject 2d lines to 3d
                 vector<cv::Mat> xyz;
+                cv::Mat overlay_img;
                 convert_lines_to_xyz(
-                    lines, img_msg, cloud_msg, T_lidar_to_pixels, T_pixels_to_lidar, frameWidth, frameHeight, xyz
+                    lines, img_msg, cloud_msg, T_lidar_to_pixels, T_pixels_to_lidar, frameWidth, frameHeight, xyz, overlay_img
                 );
                 
                 //5 Convert lane detection to GM format [Ji-Hwan]
@@ -175,9 +185,19 @@ int main(int argc, char **argv) {
                 //5 Publish detected lanes over ROS [Ji-Hwan]
                 sensor_msgs::PointCloud2 pc_msg;
                 pcl::toROSMsg(*cloud, pc_msg);
-                pc_msg.header.stamp = ros::Time::now();
-                pc_msg.header.frame_id = "lidar_frame";
-                pub.publish(pc_msg);
+                pc_msg.header.seq = cloud_msg->header.seq;
+                pc_msg.header.stamp = cloud_time;
+                pc_msg.header.frame_id = "os_sensor";
+                lanedet_cloud_pub.publish(pc_msg);
+
+                // Add overlay_img to img_msg
+                std_msgs::Header header;
+                header.seq = img_msg->header.seq;
+                header.stamp = cloud_time;
+                header.frame_id = "os_sensor";
+                img_bridge = cv_bridge::CvImage(header, sensor_msgs::image_encodings::RGB8, overlay_img);
+                img_bridge.toCompressedImageMsg(compressed_img_msg); // from cv_bridge to sensor_msgs::CompressedImage
+                lanedet_image_pub.publish(compressed_img_msg);
             }
         }
         ros::spinOnce();
@@ -395,12 +415,20 @@ void saveDepthImage(const cv::Mat& depthMatrix, const std::string& filename) {
     }
 }
 
-void saveImage(cv::Mat image, vector<cv::Mat> sampledPoints_vec, cv::Mat PC_uvd_filtered, const std::string& filename) {
+void saveImage(cv::Mat image, vector<cv::Mat> sampledPoints_vec, cv::Mat PC_uvd_filtered, cv::Mat &overlay_img) {
 
-    // Overlay red circles for PC_uvd_filtered
-    for (int i = 0; i < PC_uvd_filtered.rows; i++) {
-        int u = static_cast<int>(PC_uvd_filtered.at<float>(i, 0));
-        int v = static_cast<int>(PC_uvd_filtered.at<float>(i, 1));
+    // create a copy with z-coordinate set to 0
+    cv::Mat uv1 = PC_uvd_filtered.clone();
+    cv::Mat d = PC_uvd_filtered.col(PC_uvd_filtered.cols - 1);
+    for (int i = 0; i < uv1.cols-1; i++) {
+        uv1.col(i) /= d; // Perspective division - [u v 1] d / d --> (u, v, 1)
+    }
+    uv1.col(2) = cv::Scalar(1); 
+
+    // Overlay red circles for uv1
+    for (int i = 0; i < uv1.rows; i++) {
+        int u = static_cast<int>(uv1.at<float>(i, 0));
+        int v = static_cast<int>(uv1.at<float>(i, 1));
         cv::circle(image, cv::Point(u, v), 3, cv::Scalar(0, 0, 255), -1);
     }
 
@@ -412,7 +440,7 @@ void saveImage(cv::Mat image, vector<cv::Mat> sampledPoints_vec, cv::Mat PC_uvd_
             cv::circle(image, cv::Point(u, v), 5, cv::Scalar(0, 255, 0), -1);
         }
     }
-    cv::imwrite(filename, image);
+    overlay_img = image;
 }
 
 /**
@@ -434,7 +462,8 @@ void convert_lines_to_xyz(
     const cv::Mat& T_pixels_to_lidar, 
     const size_t width,
     const size_t height,
-    vector<cv::Mat> &xyz) {
+    vector<cv::Mat> &xyz,
+    cv::Mat &overlay_img) {
 
     // Convert to OpenCV image
     cv::Mat img = cv::imdecode(cv::Mat(img_msg->data), 1);
@@ -479,7 +508,7 @@ void convert_lines_to_xyz(
     pixels_to_depth(PC_lidar_mat, T_lidar_to_pixels, height, width, PC_uv1d_filtered);  
     
 
-    saveImage(img, sampledPoints_vec, PC_uv1d_filtered, "overlay.png"); // CONFIRMED
+    saveImage(img, sampledPoints_vec, PC_uv1d_filtered, overlay_img); // CONFIRMED
     // saveDepthImage(PC_uv1d_filtered, "depth.png");
     
     //3 Get closest depth (nearest search) to each line anchor point 
