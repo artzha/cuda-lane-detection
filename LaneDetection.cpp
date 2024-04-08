@@ -47,6 +47,7 @@ extern cv::Mat vectorToMat(const std::vector<double>& vec, int rows, int cols) {
     return mat;
 };
 
+
 // DEFINITION OF GLOBAL VARIABLES
 std::string IMAGE_TOPIC = "/ecocar/stereo/left/image_raw/compressed";
 std::string CLOUD_TOPIC = "/ecocar/ouster/lidar_packets";
