@@ -18,6 +18,7 @@
 
 extern void convert_lines_to_xyz(
     vector<Line>& lines,
+    const sensor_msgs::CompressedImage::ConstPtr img_msg,
     const sensor_msgs::PointCloud2::ConstPtr cloud_msg, 
     const cv::Mat& T_lidar_to_pixels, 
     const cv::Mat& T_pixels_to_lidar, 
@@ -82,6 +83,7 @@ void getClosestDepth(const vector<cv::Mat>& sampledPoints_vec,
                      const cv::Mat& PC_uvd,
                      vector<cv::Mat>& indexVector);
 void saveDepthImage(const cv::Mat& depthMatrix, const std::string& filename);
+void saveImage(cv::Mat image, vector<cv::Mat> sampledPoints_vec, cv::Mat PC_uvd_filtered, const std::string& filename);
 
 
 int main(int argc, char **argv) {
@@ -102,7 +104,7 @@ int main(int argc, char **argv) {
 
     int houghStrategy = settings["houghStrategy"].as<std::string>() == "cuda" ? CUDA : SEQUENTIAL;
     int frameWidth = settings["frameWidth"].as<int>();
-    int frameHeight = settings["frameHeight"].as<int>();
+    int frameHeight = settings["frameHeight"].as<int>();    
 
     YAML::Node lidar2cam0 = YAML::LoadFile("/root/cuda-lane-detection/calibrations/44/calib_os1_to_cam0.yaml");
     YAML::Node cam0_intrinsics = YAML::LoadFile("/root/cuda-lane-detection/calibrations/44/calib_cam0_intrinsics.yaml");
@@ -115,8 +117,8 @@ int main(int argc, char **argv) {
     cv::Mat T_canon = cv::Mat::eye(3, 4, CV_32FC1);
     cv::Mat T_lidar_to_pixels = K * T_canon * T_lidar_to_cam; // (3,3) x (3, 4) x (4, 4) = (3, 4)
 
-    cv::Mat T_canon_inv = cv::Mat::eye(4, 3, CV_32FC1);
     cv::Mat K_inv = K.inv();
+    cv::Mat T_canon_inv = cv::Mat::eye(4, 3, CV_32FC1);
     cv::Mat T_lidar_to_cam_inv = T_lidar_to_cam.inv();
     cv::Mat T_pixels_to_lidar = T_lidar_to_cam_inv * T_canon_inv * K_inv; // (4,4) x (4, 3) x (3, 3) = (4, 3)
 
@@ -156,7 +158,7 @@ int main(int argc, char **argv) {
                 //3 Compute line anchor depths from lidar & backproject 2d lines to 3d
                 vector<cv::Mat> xyz;
                 convert_lines_to_xyz(
-                    lines, cloud_msg, T_lidar_to_pixels, T_pixels_to_lidar, frameHeight, frameWidth, xyz
+                    lines, img_msg, cloud_msg, T_lidar_to_pixels, T_pixels_to_lidar, frameWidth, frameHeight, xyz
                 );
                 
                 //5 Convert lane detection to GM format [Ji-Hwan]
@@ -254,15 +256,19 @@ void samplePointsAlongLine(const cv::Point& startPoint,
     
     // Sample points along the line
     for (int i = 0; i < numSamples; i++) {
-        int x = static_cast<int>(startPoint.x + i * stepSizeX);
-        int y = static_cast<int>(startPoint.y + i * stepSizeY);
+        // if (i > numSamples / 2) {
+        // }
+        int u = static_cast<int>(startPoint.x + i * stepSizeX);
+        int v = static_cast<int>(startPoint.y + i * stepSizeY);
         cv::Mat pointMat = cv::Mat(1, 3, CV_32FC1);
-        pointMat.at<float>(0, 0) = x;
-        pointMat.at<float>(0, 1) = y;
-        pointMat.at<float>(0, 2) = 0;
+        pointMat.at<float>(0, 0) = u;
+        pointMat.at<float>(0, 1) = v;
+        pointMat.at<float>(0, 2) = 1;
         sampledPoints_mat.push_back(pointMat);
     }
 }
+
+
 
 void extractPoints(const sensor_msgs::PointCloud2::ConstPtr& cloud_msg, 
                    cv::Mat& PC_lidar_mat) {
@@ -290,7 +296,7 @@ void getClosestDepth(const vector<cv::Mat>& sampledPoints_vec,
     
     // create a copy with z-coordinate set to 0
     cv::Mat PC_uvd_copy = PC_uvd.clone();
-    PC_uvd_copy.col(2) = cv::Scalar(0);
+    PC_uvd_copy.col(2) = cv::Scalar(1);
     
     // Use kdtree to get index of the point cloud with the closest depth
     // Create a KD-Tree for the point cloud
@@ -331,6 +337,7 @@ void pixels_to_depth(const cv::Mat& pc_np, const cv::Mat& T_lidar_to_pixels, int
         float u = lidar_pts.at<float>(i, 0);
         float v = lidar_pts.at<float>(i, 1);
         float d = pc_rect_cam.at<float>(i, 2);
+        // float d = pc_np.at<float>(i, 2);
 
         // Remove points outside & behind of images
         if ((u >= 0 && u < frameWidth && v >= 0 && v < frameHeight && d > 1.0)) {
@@ -378,6 +385,26 @@ void saveDepthImage(const cv::Mat& depthMatrix, const std::string& filename) {
     }
 }
 
+void saveImage(cv::Mat image, vector<cv::Mat> sampledPoints_vec, cv::Mat PC_uvd_filtered, const std::string& filename) {
+
+    // Overlay red circles for PC_uvd_filtered
+    for (int i = 0; i < PC_uvd_filtered.rows; i++) {
+        int u = static_cast<int>(PC_uvd_filtered.at<float>(i, 0));
+        int v = static_cast<int>(PC_uvd_filtered.at<float>(i, 1));
+        cv::circle(image, cv::Point(u, v), 3, cv::Scalar(0, 0, 255), -1);
+    }
+
+    // Overlay green circles for sampledPoints_vec
+    for (const cv::Mat& sampledPoints : sampledPoints_vec) {
+        for (int i = 0; i < sampledPoints.rows; i++) {
+            int u = static_cast<int>(sampledPoints.at<float>(i, 0));
+            int v = static_cast<int>(sampledPoints.at<float>(i, 1));
+            cv::circle(image, cv::Point(u, v), 5, cv::Scalar(0, 255, 0), -1);
+        }
+    }
+    cv::imwrite(filename, image);
+}
+
 /**
  * Convert lines to uvd coordinates in pixel space with depth information.
  * Returns uvd with LineAnchors type (L (# of lines) x n (# of anchors) x 3 (coordinates) vector)
@@ -391,6 +418,7 @@ void saveDepthImage(const cv::Mat& depthMatrix, const std::string& filename) {
  */
 void convert_lines_to_xyz(
     vector<Line>& lines,
+    const sensor_msgs::CompressedImage::ConstPtr img_msg,
     const sensor_msgs::PointCloud2::ConstPtr cloud_msg, 
     const cv::Mat& T_lidar_to_pixels, 
     const cv::Mat& T_pixels_to_lidar, 
@@ -398,34 +426,43 @@ void convert_lines_to_xyz(
     const size_t height,
     vector<cv::Mat> &xyz) {
 
-    //0 Uniformly sample points along each line (u, v)
-    // n # of Line object
-    // for each line, we will have 10 anchor points
-    vector<cv::Mat> sampledPoints_vec;
-    size_t numAnchors = 10;
+    // Convert to OpenCV image
+    cv::Mat img = cv::imdecode(cv::Mat(img_msg->data), 1);
+    // cout << "Image frame: (" << height << ", " << width << ")" << endl;
 
+    //0 Uniformly sample points along each line (u, v)
+    // n # of Line object. for each line, numAnchors anchor points
+    vector<cv::Mat> sampledPoints_vec;
+    size_t numAnchors = 20;
     for (size_t i = 0; i < lines.size(); i++) {
         cv::Mat sampledPoints_mat;
         // starting and ending points of a line
-        int y1 = height;
+        // int y1 = height;
+        int y1 = 0.75 * height;
         int y2 = (height / 2) + (height / 10);
         int x1 = (int) lines[i].getX(y1);
         int x2 = (int) lines[i].getX(y2);
+
+        std::cout << "Start: (" << x1 << ", " << y1 << ") & End: (" << x2 << ", " << y2 << ")" << std::endl;
+        // Start: (851, 600) & End: (563, 360)
+        // Start: (953, 600) & End: (580, 360)
+        
         samplePointsAlongLine(Point(x1, y1), Point(x2, y2), numAnchors, sampledPoints_mat);
         sampledPoints_vec.push_back(sampledPoints_mat);
-        }
+    }
 
     //1 Project lidar to (image) pixel cooridnates | TESTED - CONFRIMED
     int numPoints = cloud_msg->width * cloud_msg->height;
     cv::Mat PC_lidar_mat(numPoints, 3, CV_32FC1);
     extractPoints(cloud_msg, PC_lidar_mat); // (N, 3)
 
-    // TESTED - CONFRIMED
-    cv::Mat PC_uvd_filtered;
-    pixels_to_depth(PC_lidar_mat, T_lidar_to_pixels, height, width, PC_uvd_filtered); 
-    
-    // saveDepthImage(PC_uvd_filtered, "depth.png");
+    // TESTED - CONFRIMED | PC_uvd_filtered looks good frin saveImage()
+    cv::Mat PC_uvd_filtered; // (u, v, z)
+    pixels_to_depth(PC_lidar_mat, T_lidar_to_pixels, height, width, PC_uvd_filtered);  
 
+    saveImage(img, sampledPoints_vec, PC_uvd_filtered, "overlay.png"); // CONFIRMED
+    // saveDepthImage(PC_uvd_filtered, "depth.png");
+    
     //3 Get closest depth (nearest search) to each line anchor point 
     vector<cv::Mat> indexVector;
     getClosestDepth(sampledPoints_vec, PC_uvd_filtered, indexVector);
@@ -441,13 +478,17 @@ void convert_lines_to_xyz(
             cv::Mat selectedPoint = PC_uvd_filtered.row(index);
             closestPoints.push_back(selectedPoint);
         }
-        
         cv::Mat anchor_uvd_mat = sampledPoints_vec[i].clone();
-        anchor_uvd_mat.col(2) = closestPoints.col(2); // extract depth
-
         cv::Mat anchor_xyz_mat = (T_pixels_to_lidar * anchor_uvd_mat.t()).t(); // (4, 3) x (3, n) = (4, n). | (n, 4)
-        anchor_xyz_mat = anchor_xyz_mat.colRange(0, anchor_xyz_mat.cols - 1); // (N, 3)
+        anchor_xyz_mat = anchor_xyz_mat.colRange(0, anchor_xyz_mat.cols - 2);  // (uv -> xyz, but only xy is needed)
+        hconcat(anchor_xyz_mat, closestPoints.col(2), anchor_xyz_mat);         // add z to xy
         xyz.push_back(anchor_xyz_mat);
+
+        if (i == 0)  {
+            cout << "closestPoints: \n" << closestPoints << endl;
+            cout << "sampledPoints_vec[i]: \n" << sampledPoints_vec[i] << endl;
+            cout << "anchor_xyz_mat: \n" << anchor_xyz_mat << endl;
+        }
     }
 }
  
@@ -508,18 +549,11 @@ cv::Mat buildHomogeneousMatrix(cv::Point3f trans, cv::Vec3f theta) {
 void convert_world_to_gm(vector<cv::Mat> xyz,
                          vector<cv::Mat>& xyz_GM) {
 
-    cout << "World coordinate space \n" << endl;
-    for (size_t i = 0; i < xyz.size(); i++) {
-        std::cout << "xyz[" << i << "]: " << xyz[i] << std::endl;
-    }
     cv::Point3f trans_lidar2GM = cv::Point3f(0, 0, 1.5);
     cv::Vec3f theta_lidar2GM = cv::Vec3f(0, 0, 0);
     cv::Mat T_lidar2GM = buildHomogeneousMatrix(trans_lidar2GM, theta_lidar2GM);
 
-    std::cout << "T_lidar2GM: " << T_lidar2GM << std::endl;
-
     for (size_t i = 0; i < xyz.size(); i++) {
-        
         cv::Mat ones = cv::Mat::ones(xyz[i].rows, 1, CV_32FC1);
         cv::Mat xyz_homo;
         cv::hconcat(xyz[i], ones, xyz_homo);
@@ -530,11 +564,14 @@ void convert_world_to_gm(vector<cv::Mat> xyz,
         
         xyz_GM.push_back(anchors_GM); // L x (N, 3)
     }
+    
+    // cout << "World coordinate space \n" << endl;
+    // for (size_t i = 0; i < xyz.size(); i++) {
+    //     std::cout << "xyz[" << i << "]: " << xyz[i] << std::endl;
+    // }
 
-    cout << "Converted to GM coordinate space \n" << endl;
-    for (size_t i = 0; i < xyz_GM.size(); i++) {
-        std::cout << "xyz_GM[" << i << "]: " << xyz_GM[i] << std::endl;
-    }
-
-
+    // cout << "Converted to GM coordinate space \n" << endl;
+    // for (size_t i = 0; i < xyz_GM.size(); i++) {
+    //     std::cout << "xyz_GM[" << i << "]: " << xyz_GM[i] << std::endl;
+    // }
 }
