@@ -54,7 +54,7 @@ SET(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin)
 # SET(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/lib)
 
 SET(libs roslib roscpp rosbag glog gflags boost_system lua5.1
-    pthread ${OpenCV_LIBS} yaml-cpp) 
+    pthread ${OpenCV_LIBS} yaml-cpp ${PCL_LIBRARIES} cv_bridge) 
 
 set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS}; -gencode arch=compute_75,code=sm_75 )
 set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS}; -std=c++14)
@@ -66,7 +66,7 @@ ROSBUILD_ADD_EXECUTABLE(cudalanedet
                         LaneDetection.cpp
                         Line.cpp
                         Preprocessing.cpp)
-SET_TARGET_PROPERTIES(cudalanedet PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
-TARGET_LINK_LIBRARIES(cudalanedet houghtransformlib ${libs} ${PCL_LIBRARIES})
+
+TARGET_LINK_LIBRARIES(cudalanedet houghtransformlib ${libs})
 TARGET_LINK_LIBRARIES(cudalanedet ${YAMLCPP_LIBRARIES})
 
