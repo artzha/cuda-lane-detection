@@ -6,17 +6,20 @@
 #include <queue>
 
 #include <yaml-cpp/yaml.h>
-#include <Eigen/Dense>
+#include <armadillo>
 
+// ROS
 #include "ros/ros.h"
 #include "std_msgs/Header.h"
+#include "std_msgs/Float32MultiArray.h"
 #include "sensor_msgs/CompressedImage.h"
 #include "sensor_msgs/PointCloud2.h"
+#include <cv_bridge/cv_bridge.h> 
 
+// Packages
 #include <pcl_conversions/pcl_conversions.h>
 #include <opencv2/flann/flann.hpp>
 
-#include <cv_bridge/cv_bridge.h> 
 
 extern void convert_lines_to_xyz(
     vector<Line>& lines,
@@ -53,6 +56,7 @@ std::string IMAGE_TOPIC = "/ecocar/stereo/left/image_raw/compressed";
 std::string CLOUD_TOPIC = "/ecocar/ouster/lidar_packets";
 std::string LANEDET_IMAGE_TOPIC = "/leva/lane_dt/stereo/left/image_raw/compressed";
 std::string LANEDET_CLOUD_TOPIC = "/leva/lane_dt/ouster/lidar_packets";
+std::string LANEDET_COEFF_TOPIC = "/leva/lane_dt/ouster/coeff";
 
 std::map<std::string, std::queue<sensor_msgs::CompressedImage::ConstPtr>> imageQueues;
 std::queue<sensor_msgs::PointCloud2::ConstPtr> cloudQueue;
@@ -90,7 +94,7 @@ void getClosestDepth(const vector<cv::Mat>& sampledPoints_vec,
                      vector<cv::Mat>& indexVector);
 void saveDepthImage(const cv::Mat& depthMatrix, const std::string& filename);
 void saveImage(cv::Mat image, vector<cv::Mat> sampledPoints_vec, cv::Mat PC_uvd_filtered, cv::Mat &overlay_img);
-
+void extractCoeff(vector<cv::Mat>& xyz_GM, vector<arma::vec>& coefficients);
 
 int main(int argc, char **argv) {
 
@@ -109,6 +113,8 @@ int main(int argc, char **argv) {
 
     ros::Publisher lanedet_image_pub = nh.advertise<sensor_msgs::CompressedImage>(LANEDET_IMAGE_TOPIC, 10);
     ros::Publisher lanedet_cloud_pub = nh.advertise<sensor_msgs::PointCloud2>(LANEDET_CLOUD_TOPIC, 10);
+    ros::Publisher lanedet_coeff_pub = nh.advertise<std_msgs::Float32MultiArray>(LANEDET_COEFF_TOPIC, 10);
+
 
     int houghStrategy = settings["houghStrategy"].as<std::string>() == "cuda" ? CUDA : SEQUENTIAL;
     int frameWidth = settings["frameWidth"].as<int>();
@@ -176,6 +182,11 @@ int main(int argc, char **argv) {
                 vector<cv::Mat> xyz_GM;
                 convert_world_to_gm(xyz, xyz_GM);
                 
+                vector<arma::vec> coefficients;
+                extractCoeff(xyz_GM, coefficients);
+
+                cout << "Debug ..." << endl;
+                
                 pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
                 for (const auto& line : xyz_GM) {
                     for (int i = 0; i < line.rows; i++) {
@@ -199,6 +210,17 @@ int main(int argc, char **argv) {
                 img_bridge = cv_bridge::CvImage(header, sensor_msgs::image_encodings::RGB8, overlay_img);
                 img_bridge.toCompressedImageMsg(compressed_img_msg); // from cv_bridge to sensor_msgs::CompressedImage
                 lanedet_image_pub.publish(compressed_img_msg);
+
+                std_msgs::Float32MultiArray coeff_msg;
+                // coeff_msg.header.stamp = cloud_time;
+                // coeff_msg.header.frame_id = "os_sensor";
+                coeff_msg.data.clear();
+                // Assign the data from the std::vector to the Float32MultiArray message
+                for (arma::vec value : coefficients) {
+                    std::vector<float> vec(value.begin(), value.end());
+                    coeff_msg.data.insert(coeff_msg.data.end(), vec.begin(), vec.end());
+                }
+                lanedet_coeff_pub.publish(coeff_msg);
             }
         }
         ros::spinOnce();
@@ -288,8 +310,6 @@ void samplePointsAlongLine(const cv::Point& startPoint,
         sampledPoints_mat.push_back(pointMat);
     }
 }
-
-
 
 void extractPoints(const sensor_msgs::PointCloud2::ConstPtr& cloud_msg, 
                    cv::Mat& PC_lidar_mat) {
@@ -444,6 +464,47 @@ void saveImage(cv::Mat image, vector<cv::Mat> sampledPoints_vec, cv::Mat PC_uvd_
     overlay_img = image;
 }
 
+void cvMatToArmaVec(const cv::Mat& cvMat, int colIndex, arma::vec& ressult) {
+    // Check if the cv::Mat type is double, if not convert
+    cv::Mat converted;
+    if (cvMat.type() != CV_64F) {
+        cvMat.convertTo(converted, CV_64F);
+    } else {
+        converted = cvMat;
+    }
+
+    // Ensure it's a single column being extracted
+    cv::Mat column = converted.col(colIndex);
+
+    // Create an Armadillo vec using the data from cv::Mat
+    // The constructor arma::vec(double* mem, size_t n_elem, bool copy_aux_mem = false, bool strict = false)
+    // is used here to create an arma::vec from memory without copying.
+    arma::vec result(column.ptr<double>(), column.rows, false);
+}
+
+void extractCoeff(vector<cv::Mat>& xyz_GM, vector<arma::vec>& coefficients) {
+
+    for (const cv::Mat& xyz_GM_element : xyz_GM) {
+        arma::vec x;
+        arma::vec y;
+        cvMatToArmaVec(xyz_GM_element, 0, x);
+        cvMatToArmaVec(xyz_GM_element, 1, y);
+
+        arma::mat A(x.n_elem, 4);
+        for (size_t i = 0; i < x.n_elem; ++i) {
+            A(i, 0) = 1;
+            A(i, 1) = x(i);
+            A(i, 2) = std::pow(x(i), 2);
+            A(i, 3) = std::pow(x(i), 3);
+        }
+
+        // Solve the normal equations (A^T * A) * coeffs = A^T * y
+        arma::vec coeffs = arma::solve(A.t() * A, A.t() * y);
+        arma::vec coeffs_float = arma::conv_to<arma::vec>::from(coeffs);
+        coefficients.push_back(coeffs_float);
+    }
+}
+
 /**
  * Convert lines to uvd coordinates in pixel space with depth information.
  * Returns uvd with LineAnchors type (L (# of lines) x n (# of anchors) x 3 (coordinates) vector)
@@ -468,7 +529,6 @@ void convert_lines_to_xyz(
 
     // Convert to OpenCV image
     cv::Mat img = cv::imdecode(cv::Mat(img_msg->data), 1);
-    // cout << "Image frame: (" << height << ", " << width << ")" << endl;
 
     //0 Uniformly sample points along each line (u, v)
     // n # of Line object. for each line, numAnchors anchor points
@@ -478,31 +538,18 @@ void convert_lines_to_xyz(
         cv::Mat sampledPoints_mat;
         // starting and ending points of a line
         // int y1 = height;
-        int y1 = 0.75 * height;
+        int y1 = 0.75 * height; // projected pcs starting from 3/4 of the image
         int y2 = (height / 2) + (height / 10);
         int x1 = (int) lines[i].getX(y1);
         int x2 = (int) lines[i].getX(y2);
 
-        std::cout << "Start: (" << x1 << ", " << y1 << ") & End: (" << x2 << ", " << y2 << ")" << std::endl;
-        // Start: (851, 600) & End: (563, 360)
-        // Start: (953, 600) & End: (580, 360)
-        
         samplePointsAlongLine(Point(x1, y1), Point(x2, y2), numAnchors, sampledPoints_mat);
         sampledPoints_vec.push_back(sampledPoints_mat);
     }
 
     //1 Project lidar to (image) pixel cooridnates | TESTED - CONFRIMED
-    // int numPoints = cloud_msg->width * cloud_msg->height;
     cv::Mat PC_lidar_mat;
-    extractPoints(cloud_msg, PC_lidar_mat); // (N, 3)
-
-    // for (int col = 0; col < PC_lidar_mat.cols; col++) {
-    //     cv::Mat column = PC_lidar_mat.col(col);
-    //     double minVal, maxVal;
-    //     cv::minMaxLoc(column, &minVal, &maxVal);
-    //     std::cout << "Column " << col << ": min = " << minVal << ", max = " << maxVal << std::endl;
-    // }
-    
+    extractPoints(cloud_msg, PC_lidar_mat); // (N, 3)    
 
     // TESTED - CONFRIMED | PC_uvd_filtered looks good frin saveImage()
     cv::Mat PC_uv1d_filtered; // (u, v, z)
@@ -535,11 +582,6 @@ void convert_lines_to_xyz(
         }
 
         cv::Mat anchor_xyz_mat = (T_pixels_to_lidar * anchor_uvd_mat.t()).t(); // (4, 3) x (3, n) = (4, n). | (n, 4) xyz0
-        // if (i == 0)  {
-        //     // cout << "closestPoints: \n" << closestPoints << endl;
-        //     // cout << "sampledPoints_vec[i]: \n" << sampledPoints_vec[i] << endl;
-        //     cout << "anchor_xyz_mat: \n" << anchor_xyz_mat << endl;
-        // }
         anchor_xyz_mat = anchor_xyz_mat.colRange(0, anchor_xyz_mat.cols - 2);  // (uv -> xyz, but only xy is needed)
         hconcat(anchor_xyz_mat, closestPoints.col(2), anchor_xyz_mat);         // add z to xy
         xyz.push_back(anchor_xyz_mat);
@@ -598,13 +640,13 @@ cv::Mat buildHomogeneousMatrix(cv::Point3f trans, cv::Vec3f theta) {
 /**
  * Project 3D points in world coordinate space to 3D points in GM coordinate space.
  *
- * @param xyz Coordinates of a 3D point of lanes in the world coordinate space (N, 4)
- * @return xyz_GM Coordinates of a 3D point of lanes in the GM coordinate space (N, 4)
+ * @param xyz Coordinates of a 3D point of lanes in the world coordinate space (N, 3)
+ * @return xyz_GM Coordinates of a 3D point of lanes in the GM coordinate space (N, 3)
  */
 void convert_world_to_gm(vector<cv::Mat> xyz,
                          vector<cv::Mat>& xyz_GM) {
 
-    cv::Point3f trans_lidar2GM = cv::Point3f(0, 0, 1.5);
+    cv::Point3f trans_lidar2GM = cv::Point3f(0, 0, 1.65111542);
     cv::Vec3f theta_lidar2GM = cv::Vec3f(0, 0, 0);
     // cv::Vec3f theta_lidar2GM = cv::Vec3f(0, 0, M_PI/2);
     cv::Mat T_lidar2GM = buildHomogeneousMatrix(trans_lidar2GM, theta_lidar2GM);
@@ -620,14 +662,4 @@ void convert_world_to_gm(vector<cv::Mat> xyz,
         
         xyz_GM.push_back(anchors_GM); // L x (N, 3)
     }
-    
-    // cout << "World coordinate space \n" << endl;
-    // for (size_t i = 0; i < xyz.size(); i++) {
-    //     std::cout << "xyz[" << i << "]: " << xyz[i] << std::endl;
-    // }
-
-    // cout << "\nConverted to GM coordinate space\n" << endl;
-    // std::cout << "xyz_GM[" << 0 << "]: " << xyz_GM[0] << std::endl;
-
-
 }

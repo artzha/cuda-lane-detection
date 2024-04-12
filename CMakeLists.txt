@@ -23,8 +23,11 @@ FIND_PACKAGE(CUDA REQUIRED)
 FIND_PACKAGE(OpenCV REQUIRED)
 FIND_PACKAGE(PCL 1.10 REQUIRED)
 FIND_PACKAGE(PkgConfig)
+FIND_PACKAGE(Armadillo REQUIRED)
+
 pkg_check_modules(YAMLCPP REQUIRED yaml-cpp>=0.5)
 include_directories(${YAMLCPP_INCLUDE_DIRS})
+include_directories(${ARMADILLO_INCLUDE_DIRS})
 
 include_directories(${PCL_INCLUDE_DIRS})
 link_directories(${PCL_LIBRARY_DIRS})
@@ -68,5 +71,4 @@ ROSBUILD_ADD_EXECUTABLE(cudalanedet
                         Preprocessing.cpp)
 
 TARGET_LINK_LIBRARIES(cudalanedet houghtransformlib ${libs})
-TARGET_LINK_LIBRARIES(cudalanedet ${YAMLCPP_LIBRARIES})
-
+TARGET_LINK_LIBRARIES(cudalanedet ${YAMLCPP_LIBRARIES} ${ARMADILLO_LIBRARIES})
