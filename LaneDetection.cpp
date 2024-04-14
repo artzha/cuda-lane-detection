@@ -551,10 +551,14 @@ void convert_lines_to_xyz(
     cv::Mat PC_lidar_mat;
     extractPoints(cloud_msg, PC_lidar_mat); // (N, 3)    
 
+    double minVal, maxVal;
+    cv::minMaxIdx(PC_lidar_mat.col(2), &minVal, &maxVal);
+    std::cout << "Minimum value: " << minVal << std::endl;
+    std::cout << "Maximum value: " << maxVal << std::endl;
+
     // TESTED - CONFRIMED | PC_uvd_filtered looks good frin saveImage()
-    cv::Mat PC_uv1d_filtered; // (u, v, z)
-    pixels_to_depth(PC_lidar_mat, T_lidar_to_pixels, height, width, PC_uv1d_filtered);  
-    
+    cv::Mat PC_uv1d_filtered; // (u, v, d)
+    pixels_to_depth(PC_lidar_mat, T_lidar_to_pixels, height, width, PC_uv1d_filtered);
 
     saveImage(img, sampledPoints_vec, PC_uv1d_filtered, overlay_img); // CONFIRMED
     // saveDepthImage(PC_uv1d_filtered, "depth.png");
@@ -578,14 +582,12 @@ void convert_lines_to_xyz(
 
         // Multiply each column of anchor_uvd_mat with the second column of closestPoints
         for (int col = 0; col < anchor_uvd_mat.cols; col++) {
-            anchor_uvd_mat.col(col) = anchor_uvd_mat.col(col).mul(closestPoints.col(2));
+            anchor_uvd_mat.col(col) = anchor_uvd_mat.col(col).mul(closestPoints.col(2));  // uv1 * uv1d
         }
 
         cv::Mat anchor_xyz_mat = (T_pixels_to_lidar * anchor_uvd_mat.t()).t(); // (4, 3) x (3, n) = (4, n). | (n, 4) xyz0
-        anchor_xyz_mat = anchor_xyz_mat.colRange(0, anchor_xyz_mat.cols - 2);  // (uv -> xyz, but only xy is needed)
-        hconcat(anchor_xyz_mat, closestPoints.col(2), anchor_xyz_mat);         // add z to xy
+        anchor_xyz_mat = anchor_xyz_mat.colRange(0, anchor_xyz_mat.cols - 1);  // (uvd -> xyz)
         xyz.push_back(anchor_xyz_mat);
-
     }
 }
  
