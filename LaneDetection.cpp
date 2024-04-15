@@ -94,7 +94,8 @@ void getClosestDepth(const vector<cv::Mat>& sampledPoints_vec,
                      vector<cv::Mat>& indexVector);
 void saveDepthImage(const cv::Mat& depthMatrix, const std::string& filename);
 void saveImage(cv::Mat image, vector<cv::Mat> sampledPoints_vec, cv::Mat PC_uvd_filtered, cv::Mat &overlay_img);
-void extractCoeff(vector<cv::Mat>& xyz_GM, vector<arma::vec>& coefficients);
+void extractCoeff(const std::vector<cv::Mat>& xyz_GM, std::vector<arma::fvec>& coefficients);
+void cvMatToArmaMat(const cv::Mat& cvMat, arma::fmat& armaMat);
 
 int main(int argc, char **argv) {
 
@@ -182,7 +183,7 @@ int main(int argc, char **argv) {
                 vector<cv::Mat> xyz_GM;
                 convert_world_to_gm(xyz, xyz_GM);
                 
-                vector<arma::vec> coefficients;
+                vector<arma::fvec> coefficients;
                 extractCoeff(xyz_GM, coefficients);
 
                 cout << "Debug ..." << endl;
@@ -216,11 +217,30 @@ int main(int argc, char **argv) {
                 // coeff_msg.header.frame_id = "os_sensor";
                 coeff_msg.data.clear();
                 // Assign the data from the std::vector to the Float32MultiArray message
-                for (arma::vec value : coefficients) {
+                for (arma::fvec value : coefficients) {
                     std::vector<float> vec(value.begin(), value.end());
                     coeff_msg.data.insert(coeff_msg.data.end(), vec.begin(), vec.end());
                 }
                 lanedet_coeff_pub.publish(coeff_msg);
+
+                //TODO ADD PUBLISHING OF LANE DETECTION USING GM COEFFICIENTS
+                vector<cv::Mat> xyz_GM_ld;
+                create_pc_from_coeff(coefficients, xyz_GM, xyz_GM_ld);
+
+                pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_gm_ld(new pcl::PointCloud<pcl::PointXYZ>);
+                for (const auto& line : xyz_GM) {
+                    for (int i = 0; i < line.rows; i++) {
+                        cloud->push_back(pcl::PointXYZ(line.at<float>(i, 0), line.at<float>(i, 1), line.at<float>(i, 2)));
+                    }
+                }
+
+                sensor_msgs::PointCloud2 pc_ld_msg;
+                pcl::toROSMsg(*cloud_gm_ld, pc_ld_msg);
+                pc_ld_msg.header.seq = cloud_msg->header.seq;
+                pc_ld_msg.header.stamp = cloud_time;
+                pc_ld_msg.header.frame_id = "os_sensor";
+                lanedet_cloud_pub.publish(pc_ld_msg);
+
             }
         }
         ros::spinOnce();
@@ -228,6 +248,14 @@ int main(int argc, char **argv) {
     destroyHandle(handle, houghStrategy);
 
     return 0;
+}
+
+void create_pc_from_coeff(const std::vector<arma::fvec>& coefficients, 
+                          const std::vector<cv::Mat>& xyz_GM, 
+                          std::vector<cv::Mat>& xyz_GM_ld) {
+    for (size_t i = 0; i < coefficients.size(); i++) {
+        
+    }
 }
 
 vector<Line> detectLanes(
@@ -464,44 +492,63 @@ void saveImage(cv::Mat image, vector<cv::Mat> sampledPoints_vec, cv::Mat PC_uvd_
     overlay_img = image;
 }
 
-void cvMatToArmaVec(const cv::Mat& cvMat, int colIndex, arma::vec& ressult) {
-    // Check if the cv::Mat type is double, if not convert
-    cv::Mat converted;
-    if (cvMat.type() != CV_64F) {
-        cvMat.convertTo(converted, CV_64F);
-    } else {
-        converted = cvMat;
-    }
-
-    // Ensure it's a single column being extracted
-    cv::Mat column = converted.col(colIndex);
-
-    // Create an Armadillo vec using the data from cv::Mat
-    // The constructor arma::vec(double* mem, size_t n_elem, bool copy_aux_mem = false, bool strict = false)
-    // is used here to create an arma::vec from memory without copying.
-    arma::vec result(column.ptr<double>(), column.rows, false);
+void cvMatToArmaMat(const cv::Mat& cvMat, arma::fmat& armaMat) {
+    armaMat = arma::fmat(reinterpret_cast<float*>(cvMat.data), cvMat.rows, cvMat.cols, false, true);
 }
 
-void extractCoeff(vector<cv::Mat>& xyz_GM, vector<arma::vec>& coefficients) {
-
-    for (const cv::Mat& xyz_GM_element : xyz_GM) {
-        arma::vec x;
-        arma::vec y;
-        cvMatToArmaVec(xyz_GM_element, 0, x);
-        cvMatToArmaVec(xyz_GM_element, 1, y);
-
-        arma::mat A(x.n_elem, 4);
-        for (size_t i = 0; i < x.n_elem; ++i) {
-            A(i, 0) = 1;
-            A(i, 1) = x(i);
-            A(i, 2) = std::pow(x(i), 2);
-            A(i, 3) = std::pow(x(i), 3);
+void extractCoeff(const std::vector<cv::Mat>& xyz_GM, std::vector<arma::fvec>& coefficients) {
+    // Save xyz_GM to .txt file
+    std::ofstream outfile("xyz_GM.txt");
+    if (outfile.is_open()) {
+        for (const cv::Mat& xyz_GM_element : xyz_GM) {
+            for (int i = 0; i < xyz_GM_element.rows; i++) {
+                for (int j = 0; j < xyz_GM_element.cols; j++) {
+                    outfile << xyz_GM_element.at<float>(i, j) << " ";
+                }
+                outfile << std::endl;
+            }
         }
+        outfile.close();
+        std::cout << "xyz_GM saved successfully." << std::endl;
+    } else {
+        std::cout << "Unable to open file." << std::endl;
+    }
+    std::cout << "Number of lines " << xyz_GM.size() << std::endl;
+    for (const cv::Mat& xyz_GM_element : xyz_GM) {
+        if (xyz_GM_element.type() != CV_32FC1) {
+            std::cerr << "Matrix type must be CV_32FC1" << std::endl;
+            continue;
+        }
+        
+        // Extract x and y columns directly
+        cv::Mat x = xyz_GM_element.col(0);
+        cv::Mat y = xyz_GM_element.col(1);
+        
+        // Convert OpenCV Mats to Armadillo matrices
+        arma::fmat arma_x, arma_y;
+        cvMatToArmaMat(x, arma_x);
+        cvMatToArmaMat(y, arma_y);
+        
+        // Prepare the design matrix A for cubic polynomial fitting
+        arma::fmat A(arma_x.n_elem, 4);
+        A.col(0) = arma::pow(arma_x, 3);
+        A.col(1) = arma::pow(arma_x, 2);
+        A.col(2) = arma_x;
+        A.col(3).ones();
 
-        // Solve the normal equations (A^T * A) * coeffs = A^T * y
-        arma::vec coeffs = arma::solve(A.t() * A, A.t() * y);
-        arma::vec coeffs_float = arma::conv_to<arma::vec>::from(coeffs);
-        coefficients.push_back(coeffs_float);
+        // Print the shape of the design matrix A
+        std::cout << "Shape of A: " << A.n_rows << " x " << A.n_cols << std::endl;
+        // Solve the normal equations using solve directly for an overdetermined system
+        arma::fvec coeffs = arma::solve(A, arma_y);
+
+        // Print the shape of the coefficients
+        std::cout << "Shape of coefficients: " << coeffs.n_rows << " x " << coeffs.n_cols << std::endl;
+
+        // Output coefficients
+        std::cout << "Coefficients: " << coeffs.t() << std::endl;
+        
+        // Store the result
+        coefficients.push_back(coeffs);
     }
 }
 
