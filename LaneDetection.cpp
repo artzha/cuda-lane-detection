@@ -194,6 +194,9 @@ int main(int argc, char **argv) {
 
                 pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
                 for (const auto& line : xyz_GM) {
+                    // std::cout << "xyz_GM: " << std::endl;
+                    // cout << line << endl;
+                    
                     for (int i = 0; i < line.rows; i++) {
                         cloud->push_back(pcl::PointXYZ(line.at<float>(i, 0), line.at<float>(i, 1), line.at<float>(i, 2)));
                     }
@@ -230,8 +233,11 @@ int main(int argc, char **argv) {
 
                 pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_gm_ld(new pcl::PointCloud<pcl::PointXYZ>);
                 for (const auto& line : xyz_GM_ld) {
+                    // std::cout << "xyz_GM_ld: " << std::endl;
+                    // cout << line << endl;
+
                     for (int i = 0; i < line.rows; i++) {
-                        cloud->push_back(pcl::PointXYZ(line.at<float>(i, 0), line.at<float>(i, 1), line.at<float>(i, 2)));
+                        cloud_gm_ld->push_back(pcl::PointXYZ(line.at<float>(i, 0), line.at<float>(i, 1), line.at<float>(i, 2)));
                     }
                 }
                 sensor_msgs::PointCloud2 pc_gm_msg;
@@ -268,12 +274,22 @@ void create_pc_from_coeff(const std::vector<arma::fvec>& coefficients,
         A.col(1) = arma::pow(arma_x, 2);
         A.col(2) = arma_x;
         A.col(3).ones();
-        
+
+
         arma::fmat arma_y = A * arma::conv_to<arma::fmat>::from(coefficient); // (n, 4) x (4, 1) = (n, 1)
         cv::Mat cv_y(arma_y.n_rows, arma_y.n_cols, CV_32FC1);
         armaMatToCvMat(arma_y, cv_y);
-        
-        xyz_GM_ld_i.col(1) = cv_y;
+
+        if (i == 0) {
+            cout << "coefficient: " << coefficient.t() << endl;
+            // cout << "inside" << endl;
+            // cout << A << endl;
+            // cout << arma::conv_to<arma::fmat>::from(coefficient) << endl;
+            cout << cv_y << endl;
+            // cout << xyz_GM_ld_i << endl;
+        }
+        cv_y.copyTo(xyz_GM_ld_i.col(1));
+        // cout << xyz_GM_ld_i << endl;
         xyz_GM_ld.push_back(xyz_GM_ld_i);
     }
 }
