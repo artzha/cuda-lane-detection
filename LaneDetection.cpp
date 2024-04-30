@@ -194,9 +194,6 @@ int main(int argc, char **argv) {
 
                 pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
                 for (const auto& line : xyz_GM) {
-                    // std::cout << "xyz_GM: " << std::endl;
-                    // cout << line << endl;
-                    
                     for (int i = 0; i < line.rows; i++) {
                         cloud->push_back(pcl::PointXYZ(line.at<float>(i, 0), line.at<float>(i, 1), line.at<float>(i, 2)));
                     }
@@ -219,13 +216,13 @@ int main(int argc, char **argv) {
                 img_bridge.toCompressedImageMsg(compressed_img_msg); // from cv_bridge to sensor_msgs::CompressedImage
                 lanedet_image_pub.publish(compressed_img_msg);
 
-                // std_msgs::Float32MultiArray coeff_msg;
-                // coeff_msg.data.clear();
-                // for (arma::fvec value : coefficients) {
-                //     std::vector<float> vec(value.begin(), value.end());
-                //     coeff_msg.data.insert(coeff_msg.data.end(), vec.begin(), vec.end());
-                // }
-                // lanedet_coeff_pub.publish(coeff_msg);
+                std_msgs::Float32MultiArray coeff_msg;
+                coeff_msg.data.clear();
+                for (arma::fvec value : coefficients) {
+                    std::vector<float> vec(value.begin(), value.end());
+                    coeff_msg.data.insert(coeff_msg.data.end(), vec.begin(), vec.end());
+                }
+                lanedet_coeff_pub.publish(coeff_msg);
 
                 vector<cv::Mat> xyz_GM_ld;
                 create_pc_from_coeff(coefficients, xyz_GM, xyz_GM_ld);
@@ -275,11 +272,6 @@ void create_pc_from_coeff(const std::vector<arma::fvec>& coefficients,
         arma::fmat arma_y = A * arma::conv_to<arma::fmat>::from(coefficient); // (n, 4) x (4, 1) = (n, 1)
         cv::Mat cv_y(arma_y.n_rows, arma_y.n_cols, CV_32FC1);
         armaMatToCvMat(arma_y, cv_y);
-
-        if (i == 0) {
-            cout << "coefficient: " << coefficient.t() << endl;
-            cout << cv_y << endl;
-        }
         
         cv_y.copyTo(xyz_GM_ld_i.col(1));
         // cout << xyz_GM_ld_i << endl;

@@ -1,5 +1,6 @@
 # Add CUDA support
-FROM nvidia/cuda:11.6.1-cudnn8-devel-ubuntu20.04
+# FROM nvidia/cuda:11.6.1-cudnn8-devel-ubuntu20.04
+FROM nvcr.io/nvidia/l4t-base:r34.1
 ENV TZ=US \
     DEBIAN_FRONTEND=noninteractive
 
@@ -13,6 +14,9 @@ ENV TORCH_CUDA_ARCH_LIST="6.0 6.1 7.0 7.5 8.0 8.6+PTX" \
 # Avoid Public GPG key error
 # https://github.com/NVIDIA/nvidia-docker/issues/1631
 # RUN rm /etc/apt/sources.list.d/cuda.list
+
+RUN apt-get update && apt-get install -y gnupg2
+
 RUN apt-key del 7fa2af80 \
     && apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/3bf863cc.pub \
     && apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/machine-learning/repos/ubuntu2004/x86_64/7fa2af80.pub
@@ -21,7 +25,7 @@ RUN apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 4B63CF8FDE
 
 # Install the required packages
 RUN apt-get update \
-    && apt-get install -y ffmpeg libsm6 libxext6 git ninja-build libglib2.0-0 libsm6 libxrender-dev libxext6 lsb-core wget curl nano mercurial python3-pip\
+    && apt-get install -y cmake make ffmpeg libsm6 libxext6 git ninja-build libglib2.0-0 libsm6 libxrender-dev libxext6 lsb-core wget curl nano mercurial python3-pip\
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -45,7 +49,7 @@ RUN apt-get update && apt-get install -y \
 
 # Install ROS Noetic
 RUN curl -sSL 'http://keyserver.ubuntu.com/pks/lookup?op=get&search=0xC1CF6E31E6BADE8868B172B4F42ED6FBAB17C654' | apt-key add -
-RUN apt-key adv --keyserver 'hkp://keyserver.ubuntu.com:80' --recv-key C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
+RUN apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ros-noetic-desktop-full
 RUN apt install -y python3-rosdep python3-rosinstall python3-rosinstall-generator python3-wstool build-essential tmux python-is-python3
