@@ -65,4 +65,6 @@ ENV FORCE_CUDA="1"
 RUN apt install -y libopencv-dev libeigen3-dev libgmp-dev libmpfr-dev libboost-all-dev gdb
 RUN apt-get install -y ros-noetic-catkin python3-catkin-tools python-pygame libgoogle-glog-dev libgflags-dev liblua5.1-0-dev libqt5websockets5-dev libqt5opengl5-dev
 
+# Add CUDACXX and CUDA compiler to path
 RUN echo 'ROS_PACKAGE_PATH=$ROS_PACKAGE_PATH:/root/cuda-lane-detection' >> ~/.bashrc
+RUN echo 'export PATH=/usr/local/cuda/bin:$PATH' >> ~/.bashrc

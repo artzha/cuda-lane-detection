@@ -99,7 +99,7 @@ void getClosestDepth(const vector<cv::Mat> &sampledPoints_vec,
                      vector<cv::Mat> &indexVector);
 void saveDepthImage(const cv::Mat &depthMatrix, const std::string &filename);
 void saveImage(cv::Mat image, vector<cv::Mat> sampledPoints_vec, cv::Mat PC_uvd_filtered, cv::Mat &overlay_img);
-void extractCoeff(const std::vector<cv::Mat> &xyz_GM, std::vector<arma::fvec> &coefficients);
+void extractCoeff(cv::Mat &xyz_best, arma::fvec &coefficients);
 void cvMatToArmaMat(const cv::Mat &cvMat, arma::fmat &armaMat);
 void create_pc_from_coeff(const std::vector<arma::fvec> &coefficients,
                           const std::vector<cv::Mat> &xyz_GM,
@@ -195,16 +195,39 @@ int main(int argc, char **argv)
                 convert_lines_to_xyz(
                     lines, img_msg, cloud_msg, T_lidar_to_pixels, T_pixels_to_lidar, frameWidth, frameHeight, xyz, overlay_img);
 
-                // 4 Using confidence bins to filter the number of lines using xyz [#lines] <= [6] make sure they're in the same order that GM expects
-
-                // Parameters for binning. minx, offsetx miny, maxy, #bins
-
                 // 5 Convert lane detection to GM format [Ji-Hwan]
                 vector<cv::Mat> xyz_GM;
                 convert_world_to_gm(xyz, xyz_GM);
 
-                vector<arma::fvec> coefficients;
-                extractCoeff(xyz_GM, coefficients);
+                // 4 Using confidence bins to filter the number of lines using xyz [#lines] <= [6] make sure they're in the same order that GM expects
+                // Parameters for binning. minx, offsetx miny, maxy, #bins
+                float LANE_WIDTH = 4.0;
+                float X_MIN = 0.5;
+                float BIN_WIDTH = 0.2;
+                int N_BINS = 6;
+
+                vector<arma::fvec> coefficients_vec;
+                for (int i = 0; i < N_BINS; i++) {
+                    // define a bin
+                    float y_min = LANE_WIDTH / 2 + (i / 2) * LANE_WIDTH - BIN_WIDTH / 2;
+                    float y_max = LANE_WIDTH / 2 + (i / 2) * LANE_WIDTH + BIN_WIDTH / 2;
+                    if (i % 2 != 0) {
+                        float tmp = y_min;
+                        y_min = -y_max;
+                        y_max = -tmp;
+                    }
+                    std::cout << "y_min: " << y_min << ", y_max: " << y_max << std::endl;
+                    
+                    // filter the least-error line given y_min, y_max, and x_min
+                    cv::Mat xyz_best = cv::Mat::zeros(xyz_GM[0].rows, 3, CV_32FC1);
+                    filter_lines(xyz_GM, y_min, y_max, X_MIN, xyz_best);
+
+                    // find coefficient for the line
+                    arma::fvec coefficients(4, arma::fill::zeros);
+                    extractCoeff(xyz_best, coefficients);
+                    coefficients_vec.push_back(coefficients);
+
+                }
 
                 pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
                 for (const auto &line : xyz_GM)
@@ -232,32 +255,34 @@ int main(int argc, char **argv)
                 img_bridge.toCompressedImageMsg(compressed_img_msg); // from cv_bridge to sensor_msgs::CompressedImage
                 lanedet_image_pub.publish(compressed_img_msg);
 
+                // PUBLISH GM LANE COEFFICIENTS
                 std_msgs::Float32MultiArray coeff_msg;
                 coeff_msg.data.clear();
-                for (arma::fvec value : coefficients)
+                for (arma::fvec value : coefficients_vec)
                 {
                     std::vector<float> vec(value.begin(), value.end());
                     coeff_msg.data.insert(coeff_msg.data.end(), vec.begin(), vec.end());
                 }
                 lanedet_coeff_pub.publish(coeff_msg);
 
-                vector<cv::Mat> xyz_GM_ld;
-                create_pc_from_coeff(coefficients, xyz_GM, xyz_GM_ld);
+                // POINTCLOUD VISUALIZATION USING GM LANE COEFFICIENTS
+                // vector<cv::Mat> xyz_GM_ld;
+                // create_pc_from_coeff(coefficients_vec, xyz_GM, xyz_GM_ld);
 
-                pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_gm_ld(new pcl::PointCloud<pcl::PointXYZ>);
-                for (const auto &line : xyz_GM_ld)
-                {
-                    for (int i = 0; i < line.rows; i++)
-                    {
-                        cloud_gm_ld->push_back(pcl::PointXYZ(line.at<float>(i, 0), line.at<float>(i, 1), line.at<float>(i, 2)));
-                    }
-                }
-                sensor_msgs::PointCloud2 pc_gm_msg;
-                pcl::toROSMsg(*cloud_gm_ld, pc_gm_msg);
-                pc_gm_msg.header.seq = cloud_msg->header.seq;
-                pc_gm_msg.header.stamp = cloud_time;
-                pc_gm_msg.header.frame_id = "os_sensor";
-                lanedet_cloud_gm_pub.publish(pc_gm_msg);
+                // pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_gm_ld(new pcl::PointCloud<pcl::PointXYZ>);
+                // for (const auto &line : xyz_GM_ld)
+                // {
+                //     for (int i = 0; i < line.rows; i++)
+                //     {
+                //         cloud_gm_ld->push_back(pcl::PointXYZ(line.at<float>(i, 0), line.at<float>(i, 1), line.at<float>(i, 2)));
+                //     }
+                // }
+                // sensor_msgs::PointCloud2 pc_gm_msg;
+                // pcl::toROSMsg(*cloud_gm_ld, pc_gm_msg);
+                // pc_gm_msg.header.seq = cloud_msg->header.seq;
+                // pc_gm_msg.header.stamp = cloud_time;
+                // pc_gm_msg.header.frame_id = "os_sensor";
+                // lanedet_cloud_gm_pub.publish(pc_gm_msg);
             }
         }
         ros::spinOnce();
@@ -580,36 +605,25 @@ void armaMatToCvMat(const arma::fmat &armaMat, cv::Mat &cvMat)
     std::memcpy(cvMat.data, armaMat.memptr(), armaMat.n_elem * sizeof(float));
 }
 
-void extractCoeff(const vector<cv::Mat> &xyz_GM, vector<arma::fvec> &coefficients)
+void extractCoeff(cv::Mat &xyz_best, arma::fvec &coefficients)
 {
+    // Extract x and y columns directly
+    cv::Mat x = xyz_best.col(0);
+    cv::Mat y = xyz_best.col(1);
 
-    for (const cv::Mat &xyz_GM_element : xyz_GM)
-    {
-        if (xyz_GM_element.type() != CV_32FC1)
-        {
-            std::cerr << "Matrix type must be CV_32FC1" << std::endl;
-            continue;
-        }
+    // Convert OpenCV Mats to Armadillo matrices
+    arma::fmat arma_x, arma_y;
+    cvMatToArmaMat(x, arma_x);
+    cvMatToArmaMat(y, arma_y);
 
-        // Extract x and y columns directly
-        cv::Mat x = xyz_GM_element.col(0);
-        cv::Mat y = xyz_GM_element.col(1);
+    // Prepare the design matrix A for cubic polynomial fitting
+    arma::fmat A(arma_x.n_elem, 4);
+    A.col(0) = arma::pow(arma_x, 3);
+    A.col(1) = arma::pow(arma_x, 2);
+    A.col(2) = arma_x;
+    A.col(3).ones();
 
-        // Convert OpenCV Mats to Armadillo matrices
-        arma::fmat arma_x, arma_y;
-        cvMatToArmaMat(x, arma_x);
-        cvMatToArmaMat(y, arma_y);
-
-        // Prepare the design matrix A for cubic polynomial fitting
-        arma::fmat A(arma_x.n_elem, 4);
-        A.col(0) = arma::pow(arma_x, 3);
-        A.col(1) = arma::pow(arma_x, 2);
-        A.col(2) = arma_x;
-        A.col(3).ones();
-
-        arma::fvec coeffs = arma::solve(A, arma_y);
-        coefficients.push_back(coeffs);
-    }
+    coefficients = arma::solve(A, arma_y);
 }
 
 /**

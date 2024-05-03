@@ -1,24 +1,29 @@
 #include "commons.h"
 
 /** Represents Line in frame */
-class Line {
-    
+class Line
+{
+
 private:
     double theta;
     double rho;
-    
-public:
+    int confidence; // number of votes in accumulator
 
-    Line(double theta, double rho);
-    
+public:
+    Line(double theta, double rho, int confidence);
+
     /** Calculates y value of line based on given x */
     double getY(double x);
-    
+
     /** Calculates x value of line based on given y */
     double getX(double y);
+
+    /** Returns confidence in line */
+    int getConfidence() { return this->confidence; }
 };
 
-class LineAnchors {
+class LineAnchors
+{
 
 private:
     vector<cv::Point3f> anchors;
@@ -26,8 +31,8 @@ private:
 public:
     LineAnchors(size_t num_anchors);
 
-    cv::Point3f operator [](int i) const    {return this->anchors[i];}
-    cv::Point3f & operator [](int i) {return this->anchors[i];}
+    cv::Point3f operator[](int i) const { return this->anchors[i]; }
+    cv::Point3f &operator[](int i) { return this->anchors[i]; }
 
     /** Get the number of anchors */
     size_t getNumAnchors();
