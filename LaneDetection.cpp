@@ -106,6 +106,8 @@ void create_pc_from_coeff(const std::vector<arma::fvec> &coefficients,
                           std::vector<cv::Mat> &xyz_GM_ld);
 void armaMatToCvMat(const arma::fmat &armaMat, cv::Mat &cvMat);
 
+void binLines(const vector<cv::Mat>& xyz_GM, int y_min, int y_max, int X_MIN, cv::Mat& xyz_best);
+
 int main(int argc, char **argv)
 {
 
@@ -199,11 +201,19 @@ int main(int argc, char **argv)
                 vector<cv::Mat> xyz_GM;
                 convert_world_to_gm(xyz, xyz_GM);
 
+                // 6 Print xyz_GM in terminal
+                // for (const auto& line : xyz_GM) {
+                //     std::cout << "xyz_GM line:" << std::endl;
+                //     for (int i = 0; i < line.rows; i++) {
+                //         std::cout << line.at<float>(i, 0) << ", " << line.at<float>(i, 1) << ", " << line.at<float>(i, 2) << std::endl;
+                //     }
+                // }
+
                 // 4 Using confidence bins to filter the number of lines using xyz [#lines] <= [6] make sure they're in the same order that GM expects
                 // Parameters for binning. minx, offsetx miny, maxy, #bins
                 float LANE_WIDTH = 4.0;
                 float X_MIN = 0.5;
-                float BIN_WIDTH = 0.2;
+                float BIN_WIDTH = 1.0;
                 int N_BINS = 6;
 
                 vector<arma::fvec> coefficients_vec;
@@ -215,18 +225,27 @@ int main(int argc, char **argv)
                         float tmp = y_min;
                         y_min = -y_max;
                         y_max = -tmp;
+                        y_min = y_min - 0.7;
+                        y_max = y_max - 0.7;
+                    } else {
+                        y_min = y_min - 0.7;
+                        y_max = y_max - 0.7;
                     }
-                    std::cout << "y_min: " << y_min << ", y_max: " << y_max << std::endl;
+                    for (const auto& line : xyz_GM) {
+                        std::cout << "xyz_GM line:" << std::endl;
+                        for (int i = 0; i < line.rows; i++) {
+                            std::cout << line.at<float>(i, 0) << ", " << line.at<float>(i, 1) << ", " << line.at<float>(i, 2) << std::endl;
+                        }
+                    }
                     
-                    // filter the least-error line given y_min, y_max, and x_min
+                    // choose the best line for the bin given y_min, y_max, and x_min
                     cv::Mat xyz_best = cv::Mat::zeros(xyz_GM[0].rows, 3, CV_32FC1);
-                    filter_lines(xyz_GM, y_min, y_max, X_MIN, xyz_best);
+                    binLines(xyz_GM, y_min, y_max, X_MIN, xyz_best);
 
                     // find coefficient for the line
                     arma::fvec coefficients(4, arma::fill::zeros);
                     extractCoeff(xyz_best, coefficients);
                     coefficients_vec.push_back(coefficients);
-
                 }
 
                 pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
@@ -238,7 +257,7 @@ int main(int argc, char **argv)
                     }
                 }
 
-                // 5 Publish detected lanes over ROS [Ji-Hwan]
+                // 5 Publish detected lanes over ROS
                 sensor_msgs::PointCloud2 pc_msg;
                 pcl::toROSMsg(*cloud, pc_msg);
                 pc_msg.header.seq = cloud_msg->header.seq;
@@ -292,10 +311,30 @@ int main(int argc, char **argv)
     return 0;
 }
 
+void binLines(const vector<cv::Mat>& xyz_GM, int y_min, int y_max, int X_MIN, cv::Mat& xyz_best) {
+
+    int cnt_best = std::numeric_limits<int>::min();
+    for (const auto& line : xyz_GM) {
+        int count = 0;
+        for (int i = 0; i < line.rows; i++) {
+            cv::Mat point = line.row(i);
+            float x = point.at<float>(0);
+            float y = point.at<float>(1);
+            if (y >= y_min && y <= y_max && x >= X_MIN) {
+                count++;
+            }
+        }
+        if (count != 0 && count > cnt_best) {
+            cnt_best = count;
+            std::cout << cnt_best << std::endl;
+            xyz_best = line.clone();
+        }
+    }
+}
+
 void create_pc_from_coeff(const std::vector<arma::fvec> &coefficients,
                           const std::vector<cv::Mat> &xyz_GM,
-                          std::vector<cv::Mat> &xyz_GM_ld)
-{
+                          std::vector<cv::Mat> &xyz_GM_ld) {
     for (size_t i = 0; i < xyz_GM.size(); i++)
     {
         const cv::Mat &mat = xyz_GM[i];
