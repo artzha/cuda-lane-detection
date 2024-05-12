@@ -1,8 +1,9 @@
 #include "Line.h"
 
-Line::Line(double theta, double rho) {
+Line::Line(double theta, double rho, int accum) {
     this->theta = theta;
     this->rho = rho;
+    this->accum = accum;
 }
 
 /** Calculates y value of line based on given x */

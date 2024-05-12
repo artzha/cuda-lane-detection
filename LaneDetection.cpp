@@ -106,14 +106,23 @@ void create_pc_from_coeff(const std::vector<arma::fvec> &coefficients,
                           std::vector<cv::Mat> &xyz_GM_ld);
 void armaMatToCvMat(const arma::fmat &armaMat, cv::Mat &cvMat);
 
-void binLines(const vector<cv::Mat>& xyz_GM, int y_min, int y_max, int X_MIN, cv::Mat& xyz_best);
+void binLines(const std::vector<Line> &lines, 
+    const std::vector<cv::Mat> &xyz_GM,
+    std::vector<cv::Mat> &xyz_binned_GM,
+    int laneWidth, 
+    int numLanes, 
+    int laneForwardMin, 
+    int laneForwardMax
+);
+
+// void binLines(const vector<cv::Mat>& xyz_GM, int y_min, int y_max, int X_MIN, cv::Mat& xyz_best);
 
 int main(int argc, char **argv)
 {
 
     cout << "Started lane detection node" << endl;
 
-    YAML::Node settings = YAML::LoadFile("/root/cuda-lane-detection/config/leva.yaml");
+    YAML::Node settings = YAML::LoadFile("/home/husky/cuda-lane-detection/config/leva.yaml");
     // TODO: Enabled reading arbitrary number of image topics from config file
 
     // ROS setup
@@ -132,9 +141,13 @@ int main(int argc, char **argv)
     int houghStrategy = settings["houghStrategy"].as<std::string>() == "cuda" ? CUDA : SEQUENTIAL;
     int frameWidth = settings["frameWidth"].as<int>();
     int frameHeight = settings["frameHeight"].as<int>();
+    // int laneWidth = settings["laneWidth"].as<int>();
+    // int numLanes = settings["numLanes"].as<int>();
+    // int laneForwardMin = settings["laneForwardMin"].as<int>();
+    // int laneForwardMax = settings["laneForwardMax"].as<int>();
 
-    YAML::Node lidar2cam0 = YAML::LoadFile("/root/cuda-lane-detection/calibrations/44/calib_os1_to_cam0.yaml");
-    YAML::Node cam0_intrinsics = YAML::LoadFile("/root/cuda-lane-detection/calibrations/44/calib_cam0_intrinsics.yaml");
+    YAML::Node lidar2cam0 = YAML::LoadFile("/home/husky/cuda-lane-detection/calibrations/44/calib_os1_to_cam0.yaml");
+    YAML::Node cam0_intrinsics = YAML::LoadFile("/home/husky/cuda-lane-detection/calibrations/44/calib_cam0_intrinsics.yaml");
 
     auto lidar2cam0_vec = lidar2cam0["extrinsic_matrix"]["data"].as<std::vector<double>>();
     auto K_vec = cam0_intrinsics["camera_matrix"]["data"].as<std::vector<double>>();
@@ -148,11 +161,12 @@ int main(int argc, char **argv)
     cv::Mat T_canon_inv = cv::Mat::eye(4, 3, CV_32FC1);
     cv::Mat T_lidar_to_cam_inv = T_lidar_to_cam.inv();
     cv::Mat T_pixels_to_lidar = T_lidar_to_cam_inv * T_canon_inv * K_inv; // (4,4) x (4, 3) x (3, 3) = (4, 3)
-
+    std::cout << "Finished initializing config files" << std::endl;
     cv_bridge::CvImage img_bridge;
     sensor_msgs::CompressedImage compressed_img_msg; // >> message to be sent
     HoughTransformHandle *handle;
     createHandle(handle, houghStrategy, frameWidth, frameHeight);
+    std::cout << "Finished initializing cuda handles " << std::endl;
     while (ros::ok())
     {
         for (auto &kv : imageQueues)
@@ -190,103 +204,130 @@ int main(int argc, char **argv)
 
                 // 2 Detect lanes in image
                 auto lines = detectLanes(img_msg, handle, houghStrategy);
+                std::cout << "Detected lanes " << "\n";
 
-                // 3 Compute line anchor depths from lidar & backproject 2d lines to 3d
-                vector<cv::Mat> xyz;
-                cv::Mat overlay_img;
-                convert_lines_to_xyz(
-                    lines, img_msg, cloud_msg, T_lidar_to_pixels, T_pixels_to_lidar, frameWidth, frameHeight, xyz, overlay_img);
+                /* BEGIN TEST CODE */
+                // // 3 Compute line anchor depths from lidar & backproject 2d lines to 3d
+                // vector<cv::Mat> xyz;
+                // cv::Mat overlay_img;
+                // convert_lines_to_xyz(
+                //     lines, img_msg, cloud_msg, T_lidar_to_pixels, T_pixels_to_lidar, frameWidth, frameHeight, xyz, overlay_img);
 
-                // 5 Convert lane detection to GM format [Ji-Hwan]ENV NVIDIA_DRIVER_CAPABILITIES compute,utility
+                // // 5 Convert lane detection to GM format [Ji-Hwan]ENV NVIDIA_DRIVER_CAPABILITIES compute,utility
 
-                vector<cv::Mat> xyz_GM;
-                convert_world_to_gm(xyz, xyz_GM);
+                // vector<cv::Mat> xyz_GM;
+                // convert_world_to_gm(xyz, xyz_GM);
 
-                // 6 Print xyz_GM in terminal
-                // for (const auto& line : xyz_GM) {
-                //     std::cout << "xyz_GM line:" << std::endl;
+                // std::vector<cv::Mat> xyz_binned_GM(6);
+                // binLines(
+                //     lines,
+                //     xyz_GM,
+                //     xyz_binned_GM,
+                //     laneWidth,
+                //     numLanes,
+                //     laneForwardMin,
+                //     laneForwardMax
+                // );
+
+                // // 6 Print xyz_GM in terminal
+                // for (const auto& line : xyz_binned_GM) {
+                //     std::cout << "xyz_binned_GM line:" << std::endl;
                 //     for (int i = 0; i < line.rows; i++) {
                 //         std::cout << line.at<float>(i, 0) << ", " << line.at<float>(i, 1) << ", " << line.at<float>(i, 2) << std::endl;
                 //     }
                 // }
 
-                // 4 Using confidence bins to filter the number of lines using xyz [#lines] <= [6] make sure they're in the same order that GM expects
-                // Parameters for binning. minx, offsetx miny, maxy, #bins
-                float LANE_WIDTH = 4.0;
-                float X_MIN = 0.5;
-                float BIN_WIDTH = 1.0;
-                int N_BINS = 6;
+                // //7 Compute coefficients for each line
+                // vector<arma::fvec> coefficients_vec;
+                // for (auto& xyz_mat : xyz_binned_GM) {
+                //     arma::fvec coefficients(4, arma::fill::zeros);
+                //     extractCoeff(xyz_mat, coefficients);
+                //     coefficients_vec.push_back(coefficients);
+                // }
 
-                vector<arma::fvec> coefficients_vec;
-                for (int i = 0; i < N_BINS; i++)
-                {
-                    // define a bin
-                    float y_min = LANE_WIDTH / 2 + (i / 2) * LANE_WIDTH - BIN_WIDTH / 2;
-                    float y_max = LANE_WIDTH / 2 + (i / 2) * LANE_WIDTH + BIN_WIDTH / 2;
-                    if (i % 2 != 0)
-                    {
-                        float tmp = y_min;
-                        y_min = -y_max;
-                        y_max = -tmp;
-                        y_min = y_min - 0.7;
-                        y_max = y_max - 0.7;
-                    } else {
-                        y_min = y_min - 0.7;
-                        y_max = y_max - 0.7;
-                    }
-                    for (const auto& line : xyz_GM) {
-                        std::cout << "xyz_GM line:" << std::endl;
-                        for (int i = 0; i < line.rows; i++) {
-                            std::cout << line.at<float>(i, 0) << ", " << line.at<float>(i, 1) << ", " << line.at<float>(i, 2) << std::endl;
-                        }
-                    }
-                    std::cout << "y_min: " << y_min << ", y_max: " << y_max << std::endl;
+                // // 4 Using confidence bins to filter the number of lines using xyz [#lines] <= [6] make sure they're in the same order that GM expects
+                // // Parameters for binning. minx, offsetx miny, maxy, #bins
+                // // binLines(
+                // //     lines, laneWidth, numLanes, laneForwardMin, laneForwardMax,
+                // //     xyz_GM
+                // // );
+                
+                // // float LANE_WIDTH = 4.0;
+                // // float X_MIN = 0.5;
+                // // float BIN_WIDTH = 1.0;
+                // // int N_BINS = 6;
 
-                    // Bin the least-error line given y_min, y_max, and x_min
-                    cv::Mat xyz_best = cv::Mat::zeros(xyz_GM[0].rows, 3, CV_32FC1);
-                    binLanes(xyz_GM, y_min, y_max, X_MIN, xyz_best);
+                // // vector<arma::fvec> coefficients_vec;
+                // // for (int i = 0; i < N_BINS; i++)
+                // // {
+                // //     // define a bin
+                // //     float y_min = LANE_WIDTH / 2 + (i / 2) * LANE_WIDTH - BIN_WIDTH / 2;
+                // //     float y_max = LANE_WIDTH / 2 + (i / 2) * LANE_WIDTH + BIN_WIDTH / 2;
+                // //     if (i % 2 != 0)
+                // //     {
+                // //         float tmp = y_min;
+                // //         y_min = -y_max;
+                // //         y_max = -tmp;
+                // //         y_min = y_min - 0.7;
+                // //         y_max = y_max - 0.7;
+                // //     } else {
+                // //         y_min = y_min - 0.7;
+                // //         y_max = y_max - 0.7;
+                // //     }
+                // //     for (const auto& line : xyz_GM) {
+                // //         std::cout << "xyz_GM line:" << std::endl;
+                // //         for (int i = 0; i < line.rows; i++) {
+                // //             std::cout << line.at<float>(i, 0) << ", " << line.at<float>(i, 1) << ", " << line.at<float>(i, 2) << std::endl;
+                // //         }
+                // //     }
+                // //     std::cout << "y_min: " << y_min << ", y_max: " << y_max << std::endl;
 
-                    // find coefficient for the line
-                    arma::fvec coefficients(4, arma::fill::zeros);
-                    extractCoeff(xyz_best, coefficients);
-                    coefficients_vec.push_back(coefficients);
-                }
+                // //     // Bin the least-error line given y_min, y_max, and x_min
+                // //     cv::Mat xyz_best = cv::Mat::zeros(xyz_GM[0].rows, 3, CV_32FC1);
+                // //     binLines(xyz_GM, y_min, y_max, X_MIN, xyz_best);
 
-                pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
-                for (const auto &line : xyz_GM)
-                {
-                    for (int i = 0; i < line.rows; i++)
-                    {
-                        cloud->push_back(pcl::PointXYZ(line.at<float>(i, 0), line.at<float>(i, 1), line.at<float>(i, 2)));
-                    }
-                }
+                // //     // find coefficient for the line
+                // //     arma::fvec coefficients(4, arma::fill::zeros);
+                // //     extractCoeff(xyz_best, coefficients);
+                // //     coefficients_vec.push_back(coefficients);
+                // // }
 
-                // 5 Publish detected lanes over ROS
-                sensor_msgs::PointCloud2 pc_msg;
-                pcl::toROSMsg(*cloud, pc_msg);
-                pc_msg.header.seq = cloud_msg->header.seq;
-                pc_msg.header.stamp = cloud_time;
-                pc_msg.header.frame_id = "os_sensor";
-                lanedet_cloud_pub.publish(pc_msg);
+                // pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
+                // for (const auto &line : xyz_binned_GM)
+                // {
+                //     for (int i = 0; i < line.rows; i++)
+                //     {
+                //         cloud->push_back(pcl::PointXYZ(line.at<float>(i, 0), line.at<float>(i, 1), line.at<float>(i, 2)));
+                //     }
+                // }
 
-                // Add overlay_img to img_msg
-                std_msgs::Header header;
-                header.seq = img_msg->header.seq;
-                header.stamp = cloud_time;
-                header.frame_id = "os_sensor";
-                img_bridge = cv_bridge::CvImage(header, sensor_msgs::image_encodings::RGB8, overlay_img);
-                img_bridge.toCompressedImageMsg(compressed_img_msg); // from cv_bridge to sensor_msgs::CompressedImage
-                lanedet_image_pub.publish(compressed_img_msg);
+                // // 5 Publish detected lanes over ROS
+                // sensor_msgs::PointCloud2 pc_msg;
+                // pcl::toROSMsg(*cloud, pc_msg);
+                // pc_msg.header.seq = cloud_msg->header.seq;
+                // pc_msg.header.stamp = cloud_time;
+                // pc_msg.header.frame_id = "os_sensor";
+                // lanedet_cloud_pub.publish(pc_msg);
 
-                // PUBLISH GM LANE COEFFICIENTS
-                std_msgs::Float32MultiArray coeff_msg;
-                coeff_msg.data.clear();
-                for (arma::fvec value : coefficients_vec)
-                {
-                    std::vector<float> vec(value.begin(), value.end());
-                    coeff_msg.data.insert(coeff_msg.data.end(), vec.begin(), vec.end());
-                }
-                lanedet_coeff_pub.publish(coeff_msg);
+                // // Add overlay_img to img_msg
+                // std_msgs::Header header;
+                // header.seq = img_msg->header.seq;
+                // header.stamp = cloud_time;
+                // header.frame_id = "os_sensor";
+                // img_bridge = cv_bridge::CvImage(header, sensor_msgs::image_encodings::RGB8, overlay_img);
+                // img_bridge.toCompressedImageMsg(compressed_img_msg); // from cv_bridge to sensor_msgs::CompressedImage
+                // lanedet_image_pub.publish(compressed_img_msg);
+
+                // // PUBLISH GM LANE COEFFICIENTS
+                // std_msgs::Float32MultiArray coeff_msg;
+                // coeff_msg.data.clear();
+                // for (arma::fvec value : coefficients_vec)
+                // {
+                //     std::vector<float> vec(value.begin(), value.end());
+                //     coeff_msg.data.insert(coeff_msg.data.end(), vec.begin(), vec.end());
+                // }
+                // lanedet_coeff_pub.publish(coeff_msg);
+                /* END TEST CODE */
 
                 // POINTCLOUD VISUALIZATION USING GM LANE COEFFICIENTS
                 // vector<cv::Mat> xyz_GM_ld;
@@ -315,26 +356,105 @@ int main(int argc, char **argv)
     return 0;
 }
 
-void binLines(const vector<cv::Mat>& xyz_GM, int y_min, int y_max, int X_MIN, cv::Mat& xyz_best) {
+/*
+This function bins each may in xyz_GM based that are within the x range
+and y range specified by the parameters. The line with the most points (accum)
+for each bin is returned for each bin.
+*/
+void binLines(const std::vector<Line> &lines, 
+    const std::vector<cv::Mat> &xyz_GM,
+    std::vector<cv::Mat> &xyz_binned_GM,
+    int laneWidth, 
+    int numLanes, 
+    int laneForwardMin, 
+    int laneForwardMax
+) {
+    std::unordered_map<int, std::vector<int> > binnedLines;
+    //1 For each xyz_GM point, count the number of points in each bin
+    // and store the bin with the most points for each line
+    float lpm = 1 / laneWidth; // lanes per meter
+    float laneMin = -laneWidth * numLanes / 2;
+    for (size_t laneIdx = 0; laneIdx < lines.size(); laneIdx++) {
+        const auto& ptsMat = xyz_GM[laneIdx];
 
-    int cnt_best = std::numeric_limits<int>::min();
-    for (const auto& line : xyz_GM) {
-        int count = 0;
-        for (int i = 0; i < line.rows; i++) {
-            cv::Mat point = line.row(i);
-            float x = point.at<float>(0);
-            float y = point.at<float>(1);
-            if (y >= y_min && y <= y_max && x >= X_MIN) {
-                count++;
+        std::vector<int> binCounts(numLanes, 0);
+        for (int i = 0; i < ptsMat.rows; i++) {
+            float x = ptsMat.at<float>(i, 0);
+            float y = ptsMat.at<float>(i, 1);
+            if (x > laneForwardMin && x < laneForwardMax) {
+                int laneBin = (int)floor((y - laneMin) * lpm);
+
+                if (laneBin >= 0 && laneBin < numLanes) {
+                    binCounts[laneBin]++;
+                }
             }
         }
-        if (count != 0 && count > cnt_best) {
-            cnt_best = count;
-            std::cout << cnt_best << std::endl;
-            xyz_best = line.clone();
+
+        // Assign the line to the bin with the most points
+        int maxBin = -1;
+        for (int i = 0; i < (int)binCounts.size(); ++i) {
+            if (binCounts[i]==0) continue;
+
+            if (maxBin==-1) {
+                maxBin = i;
+            } else if (binCounts[i] >  binCounts[maxBin]) {
+                maxBin = i;
+            }
+        }
+        if (maxBin>-1) {
+            binnedLines[maxBin].push_back(laneIdx);
+        }
+    }
+
+    //2 For each lane, select the cv::Mat that corresponds
+    // to the line with the most points
+    std::vector<int> laneToLineId(numLanes, -1);
+    for (const auto&kv : binnedLines) {
+        auto laneId = kv.first;
+        const auto& lineIds = kv.second;
+
+        int bestLineId = -1;
+        for (auto lineId : lineIds) {
+            if (bestLineId==-1) {
+                bestLineId = lineId;
+            } else if (lines[lineId].getAccum() > lines[bestLineId].getAccum()) {
+                bestLineId = lineId;
+            }
+        }
+        laneToLineId[laneId] = bestLineId;
+    }
+
+    //3 Select the best xyz_GM cv::Mat for each lane
+    std::vector<int> gmLaneOrder = {4, 2, 0, 1, 3, 5};
+    for (size_t i = 0; i < laneToLineId.size(); ++i) {
+        if (laneToLineId[i] > -1) {
+            xyz_binned_GM[gmLaneOrder[i]] = xyz_GM[laneToLineId[i]];
+        } else {
+            xyz_binned_GM[gmLaneOrder[i]] = cv::Mat::zeros(12, 3, CV_32FC1); // (N, 3)
         }
     }
 }
+
+// void binLines(const vector<cv::Mat>& xyz_GM, int y_min, int y_max, int X_MIN, cv::Mat& xyz_best) {
+
+//     int cnt_best = std::numeric_limits<int>::min();
+//     for (const auto& line : xyz_GM) {
+//         int count = 0;
+//         for (int i = 0; i < line.rows; i++) {
+//             cv::Mat point = line.row(i);
+//             float x = point.at<float>(0);
+//             float y = point.at<float>(1);
+//             if (y >= y_min && y <= y_max && x >= X_MIN) {
+//                 count++;
+//             }
+//         }
+//         if (count != 0 && count > cnt_best) {
+//             cnt_best = count;
+//             std::cout << cnt_best << std::endl;
+//             xyz_best = line.clone();
+//         }
+//     }
+// }
 
 void create_pc_from_coeff(const std::vector<arma::fvec> &coefficients,
                           const std::vector<cv::Mat> &xyz_GM,
@@ -388,7 +508,7 @@ vector<Line> detectLanes(
         houghTransformCuda(handle, preProcFrame, lines);
     else if (houghStrategy == SEQUENTIAL)
         houghTransformSeq(handle, preProcFrame, lines);
-
+    std::cout << "Performed hough transform\n";
     drawLines(frame, lines);
     // cv::imwrite("frame.png", frame);
     // outputVideo << frame;

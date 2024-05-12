@@ -6,16 +6,19 @@ class Line {
 private:
     double theta;
     double rho;
-    
+    int accum;
 public:
 
-    Line(double theta, double rho);
+    Line(double theta, double rho, int accum);
     
     /** Calculates y value of line based on given x */
     double getY(double x);
     
     /** Calculates x value of line based on given y */
     double getX(double y);
+
+    /** Get the number of accumulator votes */
+    int getAccum() const { return this->accum; }
 };
 
 class LineAnchors {

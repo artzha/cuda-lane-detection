@@ -33,3 +33,11 @@
 *.exe
 *.out
 *.app
+
+*.bag
+*.png
+*.rviz
+*.txt
+
+bin/**
+build/**

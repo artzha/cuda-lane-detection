@@ -60,6 +60,7 @@ SET(libs roslib roscpp rosbag glog gflags boost_system lua5.1
     pthread ${OpenCV_LIBS} yaml-cpp ${PCL_LIBRARIES} cv_bridge) 
 
 set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS}; -gencode arch=compute_75,code=sm_75 )
+# set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS}; -gencode arch=compute_86,code=sm_86 )
 set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS}; -std=c++14)
 
 # CUDA_ADD_LIBRARY(houghtransformlib "HoughTransform.cu")

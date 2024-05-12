@@ -98,7 +98,11 @@ void houghTransformSeq(HoughTransformHandle *handle, Mat frame, vector<Line> &li
         for (int j = 0; j < h->nCols; j++) {
             if (h->accumulator[i * h->nCols + j] >= THRESHOLD &&
                 isLocalMaximum(i, j, h->nRows, h->nCols, h->accumulator))
-                lines.push_back(Line((THETA_A-THETA_VARIATION) + (j * THETA_STEP_SIZE), (i - (h->nRows / 2)) * RHO_STEP_SIZE));
+                lines.push_back(Line(
+                    (THETA_A-THETA_VARIATION) + (j * THETA_STEP_SIZE), 
+                    (i - (h->nRows / 2)) * RHO_STEP_SIZE, 
+                    h->accumulator[i * h->nCols + j]    
+                ));
         }
     }
 }
@@ -139,10 +143,11 @@ __global__ void findLinesKernel(int nRows, int nCols, int *accumulator, int *lin
     int j = blockIdx.y * blockDim.y + threadIdx.y;
 
     if (accumulator[i * nCols + j] >= THRESHOLD && isLocalMaximum(i, j, nRows, nCols, accumulator)) {
-        int insertPt = atomicAdd(lineCounter, 2);
-        if (insertPt + 1 < 2 * MAX_NUM_LINES) {
+        int insertPt = atomicAdd(lineCounter, 3);
+        if (insertPt + 1 < 3 * MAX_NUM_LINES) {
             lines[insertPt] = THETA_A-THETA_VARIATION + (j * THETA_STEP_SIZE);
             lines[insertPt + 1] = (i - (nRows / 2)) * RHO_STEP_SIZE;
+            lines[insertPt + 2] = accumulator[i * nCols + j];
         }
     }
 }
@@ -174,10 +179,10 @@ void houghTransformCuda(HoughTransformHandle *handle, Mat frame, vector<Line> &l
     cudaDeviceSynchronize();
 
     cudaMemcpy(&h->lineCounter, h->d_lineCounter, sizeof(int), cudaMemcpyDeviceToHost);
-    cudaMemcpy(h->lines, h->d_lines, 2 * MAX_NUM_LINES * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpy(h->lines, h->d_lines, 3 * MAX_NUM_LINES * sizeof(int), cudaMemcpyDeviceToHost);
 
-    for (int i = 0; i < h->lineCounter - 1; i += 2) {
-        lines.push_back(Line(h->lines[i], h->lines[i + 1]));
+    for (int i = 0; i < h->lineCounter - 1; i += 3) {
+        lines.push_back(Line(h->lines[i], h->lines[i + 1], h->lines[i + 2] ));
     }
 }
 
@@ -194,10 +199,10 @@ void createHandle(HoughTransformHandle *&handle, int houghStrategy, int frameWid
     if (houghStrategy == CUDA) {
         CudaHandle *h = new CudaHandle();
         h->frameSize = frameWidth * frameHeight * sizeof(uchar);
-        cudaMallocHost(&(h->lines), 2 * MAX_NUM_LINES * sizeof(int));
+        cudaMallocHost(&(h->lines), 3 * MAX_NUM_LINES * sizeof(int));
         h->lineCounter = 0;
 
-        cudaMalloc(&h->d_lines, 2 * MAX_NUM_LINES * sizeof(int));
+        cudaMalloc(&h->d_lines, 3 * MAX_NUM_LINES * sizeof(int));
         cudaMalloc(&h->d_lineCounter, sizeof(int));
         cudaMalloc(&h->d_frame, h->frameSize);
         cudaMalloc(&h->d_accumulator, nRows * nCols * sizeof(int));
