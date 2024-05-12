@@ -207,26 +207,27 @@ int main(int argc, char **argv)
                 int N_BINS = 6;
 
                 vector<arma::fvec> coefficients_vec;
-                for (int i = 0; i < N_BINS; i++) {
+                for (int i = 0; i < N_BINS; i++)
+                {
                     // define a bin
                     float y_min = LANE_WIDTH / 2 + (i / 2) * LANE_WIDTH - BIN_WIDTH / 2;
                     float y_max = LANE_WIDTH / 2 + (i / 2) * LANE_WIDTH + BIN_WIDTH / 2;
-                    if (i % 2 != 0) {
+                    if (i % 2 != 0)
+                    {
                         float tmp = y_min;
                         y_min = -y_max;
                         y_max = -tmp;
                     }
                     std::cout << "y_min: " << y_min << ", y_max: " << y_max << std::endl;
-                    
-                    // filter the least-error line given y_min, y_max, and x_min
+
+                    // Bin the least-error line given y_min, y_max, and x_min
                     cv::Mat xyz_best = cv::Mat::zeros(xyz_GM[0].rows, 3, CV_32FC1);
-                    filter_lines(xyz_GM, y_min, y_max, X_MIN, xyz_best);
+                    binLanes(xyz_GM, y_min, y_max, X_MIN, xyz_best);
 
                     // find coefficient for the line
                     arma::fvec coefficients(4, arma::fill::zeros);
                     extractCoeff(xyz_best, coefficients);
                     coefficients_vec.push_back(coefficients);
-
                 }
 
                 pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
