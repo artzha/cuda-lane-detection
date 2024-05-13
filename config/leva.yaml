@@ -9,6 +9,7 @@ topics:
     name: "/ouster/points"
     type: "sensor_msgs/PointCloud2"
 houghStrategy: "cuda"
+debugMode: 1 # 0 is no debug, -> increases verbosity
 frameWidth: 960
 frameHeight: 600
 laneWidth: 4 # meters

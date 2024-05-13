@@ -20,8 +20,6 @@
 #include <pcl_conversions/pcl_conversions.h>
 #include <opencv2/flann/flann.hpp>
 
-#define DEBUG_MODE (int) 0 // 0 is off
-
 extern void convert_lines_to_xyz(
     vector<Line> &lines,
     const sensor_msgs::CompressedImage::ConstPtr img_msg,
@@ -124,7 +122,7 @@ int main(int argc, char **argv)
 
     cout << "Started lane detection node" << endl;
 
-    YAML::Node settings = YAML::LoadFile("/home/husky/cuda-lane-detection/config/leva.yaml");
+    YAML::Node settings = YAML::LoadFile("/root/cuda-lane-detection/config/leva.yaml");
     // TODO: Enabled reading arbitrary number of image topics from config file
 
     // ROS setup
@@ -147,9 +145,10 @@ int main(int argc, char **argv)
     int numLanes = settings["numLanes"].as<int>();
     int laneForwardMin = settings["laneForwardMin"].as<int>();
     int laneForwardMax = settings["laneForwardMax"].as<int>();
+    const int debugMode = settings["debugMode"].as<int>();
 
-    YAML::Node lidar2cam0 = YAML::LoadFile("/home/husky/cuda-lane-detection/calibrations/44/calib_os1_to_cam0.yaml");
-    YAML::Node cam0_intrinsics = YAML::LoadFile("/home/husky/cuda-lane-detection/calibrations/44/calib_cam0_intrinsics.yaml");
+    YAML::Node lidar2cam0 = YAML::LoadFile("/root/cuda-lane-detection/calibrations/44/calib_os1_to_cam0.yaml");
+    YAML::Node cam0_intrinsics = YAML::LoadFile("/root/cuda-lane-detection/calibrations/44/calib_cam0_intrinsics.yaml");
 
     auto lidar2cam0_vec = lidar2cam0["extrinsic_matrix"]["data"].as<std::vector<double>>();
     auto K_vec = cam0_intrinsics["camera_matrix"]["data"].as<std::vector<double>>();
@@ -230,7 +229,7 @@ int main(int argc, char **argv)
                     laneForwardMax
                 );
 
-                if (DEBUG_MODE==2) {
+                if (debugMode==2) {
                     // 6 Print xyz_GM in terminal
                     for (const auto& line : xyz_binned_GM) {
                         std::cout << "xyz_binned_GM line:" << std::endl;
@@ -283,7 +282,7 @@ int main(int argc, char **argv)
                 }
                 lanedet_coeff_pub.publish(coeff_msg);
 
-                if (DEBUG_MODE==1) {
+                if (debugMode==1) {
                     // POINTCLOUD VISUALIZATION USING GM LANE COEFFICIENTS
                     vector<cv::Mat> xyz_GM_ld;
                     create_pc_from_coeff(coefficients_vec, xyz_binned_GM, xyz_GM_ld);
@@ -304,7 +303,7 @@ int main(int argc, char **argv)
                     lanedet_cloud_gm_pub.publish(pc_gm_msg);
                 }
 
-                if (DEBUG_MODE==2) {
+                if (debugMode==1) {
                     // Add overlay_img to img_msg
                     std_msgs::Header header;
                     header.seq = img_msg->header.seq;
@@ -342,7 +341,6 @@ void binLines(const std::vector<Line> &lines,
     float lpm = 1.0f / laneWidth; // lanes per meter
     float laneMin = -11; // manually tuned from lidar
     for (size_t lineIdx = 0; lineIdx < lines.size(); lineIdx++) {
-        std::cout << "Checking line " << lineIdx << '\n';
         const auto& ptsMat = xyz_GM[lineIdx];
 
         std::vector<int> binCounts(numLanes, 0);
@@ -360,7 +358,6 @@ void binLines(const std::vector<Line> &lines,
         // Assign the line to the lane with the most points
         int bestLane = -1;
         for (int i = 0; i < (int)binCounts.size(); ++i) {
-            std::cout << "bin count i " << i << " count " << binCounts[i] << '\n';
             if (binCounts[i]==0) continue;
 
             if (bestLane==-1) {
@@ -380,26 +377,22 @@ void binLines(const std::vector<Line> &lines,
     for (const auto&kv : binnedLines) {
         auto laneId = kv.first;
         const auto& lineIds = kv.second;
-        std::cout << "Checking lane " << laneId <<'\n';
+
         int bestLineId = -1;
         for (auto lineId : lineIds) {
-            std::cout << "Checking line id " << lineId <<'\n';
             if (bestLineId==-1) {
                 bestLineId = lineId;
             } else if (lines[lineId].getAccum() > lines[bestLineId].getAccum()) {
                 bestLineId = lineId;
             }
         }
-        std::cout << "Best line id " << bestLineId << '\n';
         laneToLineId[laneId] = bestLineId;
     }
 
     //3 Select the best xyz_GM cv::Mat for each lane
     std::vector<int> gmLaneOrder = {4, 2, 0, 1, 3, 5};
     for (size_t i = 0; i < laneToLineId.size(); ++i) {
-        std::cout << "Lane " << i << " line id " << laneToLineId[i] << '\n';
         if (laneToLineId[i] > -1) {
-            std::cout << "Modifying Lane " << '\n';
             xyz_binned_GM[gmLaneOrder[i]] = xyz_GM[laneToLineId[i]];
         } else {
             xyz_binned_GM[gmLaneOrder[i]] = cv::Mat::zeros(12, 3, CV_32FC1); // (N, 3)
