@@ -20,6 +20,8 @@
 #include <pcl_conversions/pcl_conversions.h>
 #include <opencv2/flann/flann.hpp>
 
+#define DEBUG_MODE (int) 0 // 0 is off
+
 extern void convert_lines_to_xyz(
     vector<Line> &lines,
     const sensor_msgs::CompressedImage::ConstPtr img_msg,
@@ -141,10 +143,10 @@ int main(int argc, char **argv)
     int houghStrategy = settings["houghStrategy"].as<std::string>() == "cuda" ? CUDA : SEQUENTIAL;
     int frameWidth = settings["frameWidth"].as<int>();
     int frameHeight = settings["frameHeight"].as<int>();
-    // int laneWidth = settings["laneWidth"].as<int>();
-    // int numLanes = settings["numLanes"].as<int>();
-    // int laneForwardMin = settings["laneForwardMin"].as<int>();
-    // int laneForwardMax = settings["laneForwardMax"].as<int>();
+    int laneWidth = settings["laneWidth"].as<int>();
+    int numLanes = settings["numLanes"].as<int>();
+    int laneForwardMin = settings["laneForwardMin"].as<int>();
+    int laneForwardMax = settings["laneForwardMax"].as<int>();
 
     YAML::Node lidar2cam0 = YAML::LoadFile("/home/husky/cuda-lane-detection/calibrations/44/calib_os1_to_cam0.yaml");
     YAML::Node cam0_intrinsics = YAML::LoadFile("/home/husky/cuda-lane-detection/calibrations/44/calib_cam0_intrinsics.yaml");
@@ -206,147 +208,112 @@ int main(int argc, char **argv)
                 auto lines = detectLanes(img_msg, handle, houghStrategy);
                 std::cout << "Detected lanes " << "\n";
 
-                /* BEGIN TEST CODE */
-                // // 3 Compute line anchor depths from lidar & backproject 2d lines to 3d
-                // vector<cv::Mat> xyz;
-                // cv::Mat overlay_img;
-                // convert_lines_to_xyz(
-                //     lines, img_msg, cloud_msg, T_lidar_to_pixels, T_pixels_to_lidar, frameWidth, frameHeight, xyz, overlay_img);
+                // 3 Compute line anchor depths from lidar & backproject 2d lines to 3d
+                vector<cv::Mat> xyz;
+                cv::Mat overlay_img;
+                convert_lines_to_xyz(
+                    lines, img_msg, cloud_msg, T_lidar_to_pixels, T_pixels_to_lidar, frameWidth, frameHeight, xyz, overlay_img
+                );
 
-                // // 5 Convert lane detection to GM format [Ji-Hwan]ENV NVIDIA_DRIVER_CAPABILITIES compute,utility
+                // 5 Convert lane detection to GM format [Ji-Hwan]ENV NVIDIA_DRIVER_CAPABILITIES compute,utility
+                vector<cv::Mat> xyz_GM;
+                convert_world_to_gm(xyz, xyz_GM);
 
-                // vector<cv::Mat> xyz_GM;
-                // convert_world_to_gm(xyz, xyz_GM);
+                std::vector<cv::Mat> xyz_binned_GM(6, cv::Mat::zeros(12, 3, CV_32FC1));
+                binLines(
+                    lines,
+                    xyz_GM,
+                    xyz_binned_GM,
+                    laneWidth,
+                    numLanes,
+                    laneForwardMin,
+                    laneForwardMax
+                );
 
-                // std::vector<cv::Mat> xyz_binned_GM(6);
-                // binLines(
-                //     lines,
-                //     xyz_GM,
-                //     xyz_binned_GM,
-                //     laneWidth,
-                //     numLanes,
-                //     laneForwardMin,
-                //     laneForwardMax
-                // );
+                if (DEBUG_MODE==2) {
+                    // 6 Print xyz_GM in terminal
+                    for (const auto& line : xyz_binned_GM) {
+                        std::cout << "xyz_binned_GM line:" << std::endl;
+                        for (int i = 0; i < line.rows; i++) {
+                            std::cout << line.at<float>(i, 0) << ", " << line.at<float>(i, 1) << ", " << line.at<float>(i, 2) << std::endl;
+                            if (i > 5) break;
+                        }
+                    }
+                    for (const auto& line : xyz_GM) {
+                        std::cout << "xyz_GM line:" << std::endl;
+                        for (int i = 0; i < line.rows; i++) {
+                            std::cout << line.at<float>(i, 0) << ", " << line.at<float>(i, 1) << ", " << line.at<float>(i, 2) << std::endl;
+                            if (i > 5) break;
+                        }
+                    }
+                }
 
-                // // 6 Print xyz_GM in terminal
-                // for (const auto& line : xyz_binned_GM) {
-                //     std::cout << "xyz_binned_GM line:" << std::endl;
-                //     for (int i = 0; i < line.rows; i++) {
-                //         std::cout << line.at<float>(i, 0) << ", " << line.at<float>(i, 1) << ", " << line.at<float>(i, 2) << std::endl;
-                //     }
-                // }
+                //7 Compute coefficients for each line
+                vector<arma::fvec> coefficients_vec;
+                for (auto& xyz_mat : xyz_binned_GM) {
+                    arma::fvec coefficients(4, arma::fill::zeros);
+                    extractCoeff(xyz_mat, coefficients);
+                    coefficients_vec.push_back(coefficients);
+                }
 
-                // //7 Compute coefficients for each line
-                // vector<arma::fvec> coefficients_vec;
-                // for (auto& xyz_mat : xyz_binned_GM) {
-                //     arma::fvec coefficients(4, arma::fill::zeros);
-                //     extractCoeff(xyz_mat, coefficients);
-                //     coefficients_vec.push_back(coefficients);
-                // }
+                pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
+                for (const auto &line : xyz_binned_GM)
+                {
+                    for (int i = 0; i < line.rows; i++)
+                    {
+                        cloud->push_back(pcl::PointXYZ(line.at<float>(i, 0), line.at<float>(i, 1), line.at<float>(i, 2)));
+                    }
+                }
 
-                // // 4 Using confidence bins to filter the number of lines using xyz [#lines] <= [6] make sure they're in the same order that GM expects
-                // // Parameters for binning. minx, offsetx miny, maxy, #bins
-                // // binLines(
-                // //     lines, laneWidth, numLanes, laneForwardMin, laneForwardMax,
-                // //     xyz_GM
-                // // );
-                
-                // // float LANE_WIDTH = 4.0;
-                // // float X_MIN = 0.5;
-                // // float BIN_WIDTH = 1.0;
-                // // int N_BINS = 6;
+                // 5 Publish detected lanes over ROS
+                sensor_msgs::PointCloud2 pc_msg;
+                pcl::toROSMsg(*cloud, pc_msg);
+                pc_msg.header.seq = cloud_msg->header.seq;
+                pc_msg.header.stamp = cloud_time;
+                pc_msg.header.frame_id = "os_sensor";
+                lanedet_cloud_pub.publish(pc_msg);
 
-                // // vector<arma::fvec> coefficients_vec;
-                // // for (int i = 0; i < N_BINS; i++)
-                // // {
-                // //     // define a bin
-                // //     float y_min = LANE_WIDTH / 2 + (i / 2) * LANE_WIDTH - BIN_WIDTH / 2;
-                // //     float y_max = LANE_WIDTH / 2 + (i / 2) * LANE_WIDTH + BIN_WIDTH / 2;
-                // //     if (i % 2 != 0)
-                // //     {
-                // //         float tmp = y_min;
-                // //         y_min = -y_max;
-                // //         y_max = -tmp;
-                // //         y_min = y_min - 0.7;
-                // //         y_max = y_max - 0.7;
-                // //     } else {
-                // //         y_min = y_min - 0.7;
-                // //         y_max = y_max - 0.7;
-                // //     }
-                // //     for (const auto& line : xyz_GM) {
-                // //         std::cout << "xyz_GM line:" << std::endl;
-                // //         for (int i = 0; i < line.rows; i++) {
-                // //             std::cout << line.at<float>(i, 0) << ", " << line.at<float>(i, 1) << ", " << line.at<float>(i, 2) << std::endl;
-                // //         }
-                // //     }
-                // //     std::cout << "y_min: " << y_min << ", y_max: " << y_max << std::endl;
+                // PUBLISH GM LANE COEFFICIENTS
+                std_msgs::Float32MultiArray coeff_msg;
+                coeff_msg.data.clear();
+                for (arma::fvec value : coefficients_vec)
+                {
+                    std::vector<float> vec(value.begin(), value.end());
+                    coeff_msg.data.insert(coeff_msg.data.end(), vec.begin(), vec.end());
+                }
+                lanedet_coeff_pub.publish(coeff_msg);
 
-                // //     // Bin the least-error line given y_min, y_max, and x_min
-                // //     cv::Mat xyz_best = cv::Mat::zeros(xyz_GM[0].rows, 3, CV_32FC1);
-                // //     binLines(xyz_GM, y_min, y_max, X_MIN, xyz_best);
+                if (DEBUG_MODE==1) {
+                    // POINTCLOUD VISUALIZATION USING GM LANE COEFFICIENTS
+                    vector<cv::Mat> xyz_GM_ld;
+                    create_pc_from_coeff(coefficients_vec, xyz_binned_GM, xyz_GM_ld);
 
-                // //     // find coefficient for the line
-                // //     arma::fvec coefficients(4, arma::fill::zeros);
-                // //     extractCoeff(xyz_best, coefficients);
-                // //     coefficients_vec.push_back(coefficients);
-                // // }
+                    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_gm_ld(new pcl::PointCloud<pcl::PointXYZ>);
+                    for (const auto &line : xyz_GM_ld)
+                    {
+                        for (int i = 0; i < line.rows; i++)
+                        {
+                            cloud_gm_ld->push_back(pcl::PointXYZ(line.at<float>(i, 0), line.at<float>(i, 1), line.at<float>(i, 2)));
+                        }
+                    }
+                    sensor_msgs::PointCloud2 pc_gm_msg;
+                    pcl::toROSMsg(*cloud_gm_ld, pc_gm_msg);
+                    pc_gm_msg.header.seq = cloud_msg->header.seq;
+                    pc_gm_msg.header.stamp = cloud_time;
+                    pc_gm_msg.header.frame_id = "os_sensor";
+                    lanedet_cloud_gm_pub.publish(pc_gm_msg);
+                }
 
-                // pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
-                // for (const auto &line : xyz_binned_GM)
-                // {
-                //     for (int i = 0; i < line.rows; i++)
-                //     {
-                //         cloud->push_back(pcl::PointXYZ(line.at<float>(i, 0), line.at<float>(i, 1), line.at<float>(i, 2)));
-                //     }
-                // }
-
-                // // 5 Publish detected lanes over ROS
-                // sensor_msgs::PointCloud2 pc_msg;
-                // pcl::toROSMsg(*cloud, pc_msg);
-                // pc_msg.header.seq = cloud_msg->header.seq;
-                // pc_msg.header.stamp = cloud_time;
-                // pc_msg.header.frame_id = "os_sensor";
-                // lanedet_cloud_pub.publish(pc_msg);
-
-                // // Add overlay_img to img_msg
-                // std_msgs::Header header;
-                // header.seq = img_msg->header.seq;
-                // header.stamp = cloud_time;
-                // header.frame_id = "os_sensor";
-                // img_bridge = cv_bridge::CvImage(header, sensor_msgs::image_encodings::RGB8, overlay_img);
-                // img_bridge.toCompressedImageMsg(compressed_img_msg); // from cv_bridge to sensor_msgs::CompressedImage
-                // lanedet_image_pub.publish(compressed_img_msg);
-
-                // // PUBLISH GM LANE COEFFICIENTS
-                // std_msgs::Float32MultiArray coeff_msg;
-                // coeff_msg.data.clear();
-                // for (arma::fvec value : coefficients_vec)
-                // {
-                //     std::vector<float> vec(value.begin(), value.end());
-                //     coeff_msg.data.insert(coeff_msg.data.end(), vec.begin(), vec.end());
-                // }
-                // lanedet_coeff_pub.publish(coeff_msg);
-                /* END TEST CODE */
-
-                // POINTCLOUD VISUALIZATION USING GM LANE COEFFICIENTS
-                // vector<cv::Mat> xyz_GM_ld;
-                // create_pc_from_coeff(coefficients_vec, xyz_GM, xyz_GM_ld);
-
-                // pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_gm_ld(new pcl::PointCloud<pcl::PointXYZ>);
-                // for (const auto &line : xyz_GM_ld)
-                // {
-                //     for (int i = 0; i < line.rows; i++)
-                //     {
-                //         cloud_gm_ld->push_back(pcl::PointXYZ(line.at<float>(i, 0), line.at<float>(i, 1), line.at<float>(i, 2)));
-                //     }
-                // }
-                // sensor_msgs::PointCloud2 pc_gm_msg;
-                // pcl::toROSMsg(*cloud_gm_ld, pc_gm_msg);
-                // pc_gm_msg.header.seq = cloud_msg->header.seq;
-                // pc_gm_msg.header.stamp = cloud_time;
-                // pc_gm_msg.header.frame_id = "os_sensor";
-                // lanedet_cloud_gm_pub.publish(pc_gm_msg);
+                if (DEBUG_MODE==2) {
+                    // Add overlay_img to img_msg
+                    std_msgs::Header header;
+                    header.seq = img_msg->header.seq;
+                    header.stamp = cloud_time;
+                    header.frame_id = "os_sensor";
+                    img_bridge = cv_bridge::CvImage(header, sensor_msgs::image_encodings::RGB8, overlay_img);
+                    img_bridge.toCompressedImageMsg(compressed_img_msg); // from cv_bridge to sensor_msgs::CompressedImage
+                    lanedet_image_pub.publish(compressed_img_msg);
+                }
             }
         }
         ros::spinOnce();
@@ -372,10 +339,11 @@ void binLines(const std::vector<Line> &lines,
     std::unordered_map<int, std::vector<int> > binnedLines;
     //1 For each xyz_GM point, count the number of points in each bin
     // and store the bin with the most points for each line
-    float lpm = 1 / laneWidth; // lanes per meter
-    float laneMin = -laneWidth * numLanes / 2;
-    for (size_t laneIdx = 0; laneIdx < lines.size(); laneIdx++) {
-        const auto& ptsMat = xyz_GM[laneIdx];
+    float lpm = 1.0f / laneWidth; // lanes per meter
+    float laneMin = -11; // manually tuned from lidar
+    for (size_t lineIdx = 0; lineIdx < lines.size(); lineIdx++) {
+        std::cout << "Checking line " << lineIdx << '\n';
+        const auto& ptsMat = xyz_GM[lineIdx];
 
         std::vector<int> binCounts(numLanes, 0);
         for (int i = 0; i < ptsMat.rows; i++) {
@@ -383,26 +351,26 @@ void binLines(const std::vector<Line> &lines,
             float y = ptsMat.at<float>(i, 1);
             if (x > laneForwardMin && x < laneForwardMax) {
                 int laneBin = (int)floor((y - laneMin) * lpm);
-
                 if (laneBin >= 0 && laneBin < numLanes) {
                     binCounts[laneBin]++;
                 }
             }
         }
 
-        // Assign the line to the bin with the most points
-        int maxBin = -1;
+        // Assign the line to the lane with the most points
+        int bestLane = -1;
         for (int i = 0; i < (int)binCounts.size(); ++i) {
+            std::cout << "bin count i " << i << " count " << binCounts[i] << '\n';
             if (binCounts[i]==0) continue;
 
-            if (maxBin==-1) {
-                maxBin = i;
-            } else if (binCounts[i] >  binCounts[maxBin]) {
-                maxBin = i;
+            if (bestLane==-1) {
+                bestLane = i;
+            } else if (binCounts[i] >  binCounts[bestLane]) {
+                bestLane = i;
             }
         }
-        if (maxBin>-1) {
-            binnedLines[maxBin].push_back(laneIdx);
+        if (bestLane>-1) {
+            binnedLines[bestLane].push_back(lineIdx);
         }
     }
 
@@ -412,22 +380,26 @@ void binLines(const std::vector<Line> &lines,
     for (const auto&kv : binnedLines) {
         auto laneId = kv.first;
         const auto& lineIds = kv.second;
-
+        std::cout << "Checking lane " << laneId <<'\n';
         int bestLineId = -1;
         for (auto lineId : lineIds) {
+            std::cout << "Checking line id " << lineId <<'\n';
             if (bestLineId==-1) {
                 bestLineId = lineId;
             } else if (lines[lineId].getAccum() > lines[bestLineId].getAccum()) {
                 bestLineId = lineId;
             }
         }
+        std::cout << "Best line id " << bestLineId << '\n';
         laneToLineId[laneId] = bestLineId;
     }
 
     //3 Select the best xyz_GM cv::Mat for each lane
     std::vector<int> gmLaneOrder = {4, 2, 0, 1, 3, 5};
     for (size_t i = 0; i < laneToLineId.size(); ++i) {
+        std::cout << "Lane " << i << " line id " << laneToLineId[i] << '\n';
         if (laneToLineId[i] > -1) {
+            std::cout << "Modifying Lane " << '\n';
             xyz_binned_GM[gmLaneOrder[i]] = xyz_GM[laneToLineId[i]];
         } else {
             xyz_binned_GM[gmLaneOrder[i]] = cv::Mat::zeros(12, 3, CV_32FC1); // (N, 3)

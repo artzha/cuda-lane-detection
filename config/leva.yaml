@@ -11,7 +11,7 @@ topics:
 houghStrategy: "cuda"
 frameWidth: 960
 frameHeight: 600
-laneWidth: 2 # meters
-numLanes: 6 # number of lanes
+laneWidth: 4 # meters
+numLanes:  6 # number of lane lines
 laneForwardMin: 5 # minimum start distnace ahead of the car to search for lanes
 laneForwardMax: 10 # maximum distance ahead of the car to search for lanes
